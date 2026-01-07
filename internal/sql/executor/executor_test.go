@@ -632,3 +632,176 @@ func setupBenchExecutor(b *testing.B) (*Executor, func()) {
 
 	return exec, cleanup
 }
+
+// ============================================================================
+// Secondary Index Tests
+// ============================================================================
+
+func TestCreateIndex(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	// Create table
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+
+	// Create index
+	result := executeSQL(t, exec, "CREATE INDEX idx_users_age ON users (age)")
+
+	if !strings.Contains(result.Message, "Created") {
+		t.Errorf("expected 'Created' in message, got %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "idx_users_age") {
+		t.Errorf("expected index name in message, got %q", result.Message)
+	}
+
+	// Verify index exists
+	tbl, ok := exec.GetTable("users")
+	if !ok {
+		t.Fatal("table users not found")
+	}
+
+	_, exists := tbl.GetIndex("idx_users_age")
+	if !exists {
+		t.Error("expected index idx_users_age to exist")
+	}
+}
+
+func TestCreateUniqueIndex(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+
+	result := executeSQL(t, exec, "CREATE UNIQUE INDEX idx_users_email ON users (email)")
+
+	if !strings.Contains(result.Message, "unique") {
+		t.Errorf("expected 'unique' in message, got %q", result.Message)
+	}
+}
+
+func TestDropIndex(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER, age INTEGER)")
+	executeSQL(t, exec, "CREATE INDEX idx_users_age ON users (age)")
+
+	// Verify index exists
+	tbl, _ := exec.GetTable("users")
+	_, exists := tbl.GetIndex("idx_users_age")
+	if !exists {
+		t.Fatal("index should exist before drop")
+	}
+
+	// Drop index
+	result := executeSQL(t, exec, "DROP INDEX idx_users_age")
+	if !strings.Contains(result.Message, "Dropped") {
+		t.Errorf("expected 'Dropped' in message, got %q", result.Message)
+	}
+
+	// Verify index is gone
+	_, exists = tbl.GetIndex("idx_users_age")
+	if exists {
+		t.Error("index should not exist after drop")
+	}
+}
+
+func TestCreateIndexOnNonexistentTable(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	l := lexer.New("CREATE INDEX idx_test ON nonexistent (col)")
+	p := parser.New(l)
+	stmt, _ := p.Parse()
+
+	_, err := exec.Execute(stmt)
+	if err == nil {
+		t.Error("expected error for nonexistent table")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("expected 'does not exist' in error, got %v", err)
+	}
+}
+
+func TestCreateIndexOnNonexistentColumn(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER)")
+
+	l := lexer.New("CREATE INDEX idx_test ON users (nonexistent)")
+	p := parser.New(l)
+	stmt, _ := p.Parse()
+
+	_, err := exec.Execute(stmt)
+	if err == nil {
+		t.Error("expected error for nonexistent column")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("expected 'does not exist' in error, got %v", err)
+	}
+}
+
+func TestIndexMaintainedOnInsert(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+	executeSQL(t, exec, "CREATE INDEX idx_users_age ON users (age)")
+
+	// Insert data after index creation
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (2, 'Bob', 25)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (3, 'Charlie', 30)")
+
+	// Verify data is inserted correctly
+	result := executeSQL(t, exec, "SELECT * FROM users")
+	if len(result.Rows) != 3 {
+		t.Errorf("expected 3 rows, got %d", len(result.Rows))
+	}
+}
+
+func TestCreateIndexOnExistingData(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+
+	// Insert data before index creation
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (2, 'Bob', 25)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (3, 'Charlie', 35)")
+
+	// Create index on existing data
+	result := executeSQL(t, exec, "CREATE INDEX idx_users_age ON users (age)")
+	if !strings.Contains(result.Message, "Created") {
+		t.Errorf("expected 'Created' in message, got %q", result.Message)
+	}
+
+	// Verify index was created
+	tbl, _ := exec.GetTable("users")
+	_, exists := tbl.GetIndex("idx_users_age")
+	if !exists {
+		t.Error("expected index to exist after creation on existing data")
+	}
+}
+
+func TestMultipleIndexes(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER, email TEXT)")
+
+	// Create multiple indexes
+	executeSQL(t, exec, "CREATE INDEX idx_users_age ON users (age)")
+	executeSQL(t, exec, "CREATE INDEX idx_users_name ON users (name)")
+	executeSQL(t, exec, "CREATE UNIQUE INDEX idx_users_email ON users (email)")
+
+	tbl, _ := exec.GetTable("users")
+
+	// Verify all indexes exist
+	indexes := tbl.ListIndexes()
+	if len(indexes) != 3 {
+		t.Errorf("expected 3 indexes, got %d", len(indexes))
+	}
+}

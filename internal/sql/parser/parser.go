@@ -347,6 +347,20 @@ func (p *Parser) parseDeleteStatement() *DeleteStatement {
 
 // parseCreateStatement parses CREATE TABLE ...
 func (p *Parser) parseCreateStatement() Statement {
+	// Check for UNIQUE INDEX or INDEX or TABLE
+	if p.peekTokenIs(lexer.TokenUnique) {
+		p.nextToken() // move to UNIQUE
+		if !p.expectPeek(lexer.TokenIndex) {
+			return nil
+		}
+		return p.parseCreateIndexStatement(true)
+	}
+
+	if p.peekTokenIs(lexer.TokenIndex) {
+		p.nextToken() // move to INDEX
+		return p.parseCreateIndexStatement(false)
+	}
+
 	// Expect TABLE
 	if !p.expectPeek(lexer.TokenTable) {
 		return nil
@@ -474,8 +488,73 @@ func (p *Parser) parseDataType() DataType {
 	}
 }
 
-// parseDropStatement parses DROP TABLE ...
+// parseCreateIndexStatement parses: CREATE [UNIQUE] INDEX name ON table (columns)
+func (p *Parser) parseCreateIndexStatement(unique bool) *CreateIndexStatement {
+	stmt := &CreateIndexStatement{
+		Unique: unique,
+	}
+
+	// Parse index name
+	if !p.expectPeek(lexer.TokenIdent) {
+		return nil
+	}
+	stmt.IndexName = p.curToken.Literal
+
+	// Expect ON
+	if !p.expectPeek(lexer.TokenOn) {
+		return nil
+	}
+
+	// Parse table name
+	if !p.expectPeek(lexer.TokenIdent) {
+		return nil
+	}
+	stmt.Table = p.curToken.Literal
+
+	// Expect (
+	if !p.expectPeek(lexer.TokenLeftParen) {
+		return nil
+	}
+
+	// Parse column names
+	stmt.Columns = p.parseIndexColumnList()
+
+	// Expect )
+	if !p.expectPeek(lexer.TokenRightParen) {
+		return nil
+	}
+
+	return stmt
+}
+
+// parseIndexColumnList parses a list of column names for an index.
+func (p *Parser) parseIndexColumnList() []string {
+	var columns []string
+
+	for {
+		if !p.expectPeek(lexer.TokenIdent) {
+			return nil
+		}
+		columns = append(columns, p.curToken.Literal)
+
+		// Check for comma or end
+		if !p.peekTokenIs(lexer.TokenComma) {
+			break
+		}
+		p.nextToken() // consume comma
+	}
+
+	return columns
+}
+
+// parseDropStatement parses DROP TABLE ... or DROP INDEX ...
 func (p *Parser) parseDropStatement() Statement {
+	// Check for INDEX
+	if p.peekTokenIs(lexer.TokenIndex) {
+		p.nextToken() // move to INDEX
+		return p.parseDropIndexStatement()
+	}
+
 	// Expect TABLE
 	if !p.expectPeek(lexer.TokenTable) {
 		return nil
@@ -514,6 +593,18 @@ func (p *Parser) parseExplainStatement() *ExplainStatement {
 	return stmt
 }
 
+// parseDropIndexStatement parses: DROP INDEX name
+func (p *Parser) parseDropIndexStatement() *DropIndexStatement {
+	stmt := &DropIndexStatement{}
+
+	// Parse index name
+	if !p.expectPeek(lexer.TokenIdent) {
+		return nil
+	}
+	stmt.IndexName = p.curToken.Literal
+
+	return stmt
+}
 // parseIdentifierList parses: ident, ident, ident
 func (p *Parser) parseIdentifierList() []string {
 	var identifiers []string

@@ -203,6 +203,44 @@ func (s *ExplainStatement) String() string {
 	return fmt.Sprintf("EXPLAIN %s", s.Statement)
 }
 
+// CreateIndexStatement represents a CREATE INDEX query.
+//
+// Example: CREATE INDEX idx_users_age ON users (age)
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Secondary indexes allow efficient lookups on non-primary-key columns.
+// Without an index on 'age', finding users by age requires a full table scan.
+// With an index, the database can use a B-tree to find matching rows directly.
+type CreateIndexStatement struct {
+	IndexName string   // Name of the index (e.g., idx_users_age)
+	Table     string   // Table to index (e.g., users)
+	Columns   []string // Columns to index (e.g., [age])
+	Unique    bool     // Whether the index enforces uniqueness
+}
+
+func (s *CreateIndexStatement) node()      {}
+func (s *CreateIndexStatement) statement() {}
+func (s *CreateIndexStatement) String() string {
+	unique := ""
+	if s.Unique {
+		unique = "UNIQUE "
+	}
+	return fmt.Sprintf("CREATE %sINDEX %s ON %s (%v)", unique, s.IndexName, s.Table, s.Columns)
+}
+
+// DropIndexStatement represents a DROP INDEX query.
+//
+// Example: DROP INDEX idx_users_age
+type DropIndexStatement struct {
+	IndexName string
+}
+
+func (s *DropIndexStatement) node()      {}
+func (s *DropIndexStatement) statement() {}
+func (s *DropIndexStatement) String() string {
+	return fmt.Sprintf("DROP INDEX %s", s.IndexName)
+}
 // ============================================================================
 // Expressions
 // ============================================================================

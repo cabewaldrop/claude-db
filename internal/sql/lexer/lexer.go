@@ -67,6 +67,9 @@ const (
 	TokenLimit
 	TokenOffset
 	TokenExplain
+	TokenIndex
+	TokenUnique
+	TokenOn
 
 	// Data types
 	TokenInt
@@ -147,6 +150,9 @@ func tokenTypeName(t TokenType) string {
 		TokenLimit:          "LIMIT",
 		TokenOffset:         "OFFSET",
 		TokenExplain:        "EXPLAIN",
+		TokenIndex:          "INDEX",
+		TokenUnique:         "UNIQUE",
+		TokenOn:             "ON",
 		TokenInt:            "INT",
 		TokenInteger:        "INTEGER",
 		TokenText:           "TEXT",
@@ -208,6 +214,9 @@ var keywords = map[string]TokenType{
 	"LIMIT":   TokenLimit,
 	"OFFSET":  TokenOffset,
 	"EXPLAIN": TokenExplain,
+	"INDEX":   TokenIndex,
+	"UNIQUE":  TokenUnique,
+	"ON":      TokenOn,
 	"INT":     TokenInt,
 	"INTEGER": TokenInteger,
 	"TEXT":    TokenText,

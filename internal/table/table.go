@@ -192,6 +192,9 @@ type Table struct {
 	nextRowID    uint64
 	dataPageIDs  []uint32 // List of data page IDs
 	metadataPage uint32   // Page storing table metadata
+
+	// Secondary indexes
+	indexes map[string]*storage.Index // Indexed by index name
 }
 
 // TableMetadata stores table information for persistence.
@@ -224,6 +227,7 @@ func NewTable(name string, schema *Schema, pager *storage.Pager) (*Table, error)
 		nextRowID:    1,
 		dataPageIDs:  []uint32{},
 		metadataPage: metaPage.ID(),
+		indexes:      make(map[string]*storage.Index),
 	}
 
 	return table, nil
@@ -238,6 +242,7 @@ func LoadTable(name string, schema *Schema, pager *storage.Pager, rootPage uint3
 		btree:       storage.LoadBTree(pager, rootPage),
 		nextRowID:   nextRowID,
 		dataPageIDs: dataPageIDs,
+		indexes:     make(map[string]*storage.Index),
 	}
 }
 
@@ -251,6 +256,7 @@ func LoadTable(name string, schema *Schema, pager *storage.Pager, rootPage uint3
 // 3. Serialize the row to bytes
 // 4. Store in a data page
 // 5. Add to primary key index (B-tree)
+// 6. Add to all secondary indexes
 func (t *Table) Insert(values []Value) (uint64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -303,6 +309,26 @@ func (t *Table) Insert(values []Value) (uint64, error) {
 	location := uint64(pageID)<<32 | uint64(offset)
 	if err := t.btree.Insert(keyBytes, location); err != nil {
 		return 0, fmt.Errorf("failed to insert into index: %w", err)
+	}
+
+	// Update secondary indexes
+	for _, idx := range t.indexes {
+		// Build index key from indexed column values
+		columnIndices := make([]int, len(idx.Columns))
+		for i, colName := range idx.Columns {
+			colIdx, _ := t.Schema.GetColumnIndex(colName)
+			columnIndices[i] = colIdx
+		}
+
+		buf := bytes.NewBuffer(nil)
+		for _, colIdx := range columnIndices {
+			t.serializeValue(buf, values[colIdx])
+		}
+		indexKey := buf.Bytes()
+
+		if err := idx.Insert(indexKey, location); err != nil {
+			return 0, fmt.Errorf("failed to update secondary index %s: %w", idx.Name, err)
+		}
 	}
 
 	return rowID, nil
@@ -749,4 +775,158 @@ func (t *Table) getRowByLocationLocked(location uint64) (Row, error) {
 	}
 
 	return row, nil
+}
+
+// ============================================================================
+// Secondary Index Management
+// ============================================================================
+
+// CreateIndex creates a new secondary index on the specified columns.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Creating an index involves:
+// 1. Creating a new B-tree for the index
+// 2. Populating it with entries for all existing rows
+// 3. Registering it so future INSERTs/UPDATEs maintain it
+func (t *Table) CreateIndex(name string, columns []string, unique bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Check if index already exists
+	if _, exists := t.indexes[name]; exists {
+		return fmt.Errorf("index %s already exists", name)
+	}
+
+	// Validate columns exist
+	columnIndices := make([]int, len(columns))
+	for i, colName := range columns {
+		idx, ok := t.Schema.GetColumnIndex(colName)
+		if !ok {
+			return fmt.Errorf("column %s does not exist", colName)
+		}
+		columnIndices[i] = idx
+	}
+
+	// Create the index
+	idx, err := storage.NewIndex(name, t.Name, columns, unique, t.pager)
+	if err != nil {
+		return fmt.Errorf("failed to create index: %w", err)
+	}
+
+	// Populate index with existing rows
+	for _, pageID := range t.dataPageIDs {
+		page, err := t.pager.GetPage(pageID)
+		if err != nil {
+			return err
+		}
+
+		rows, err := t.readRowsFromPage(page)
+		if err != nil {
+			return err
+		}
+
+		// Find where each row is stored to get its location
+		for _, row := range rows {
+			// Build index key from column values
+			keyBytes := t.buildIndexKey(row, columnIndices)
+
+			// Get the row location from the primary index
+			var pkKeyBytes []byte
+			if t.Schema.PrimaryKey >= 0 {
+				var err error
+				pkKeyBytes, err = t.valueToBytes(row.Values[t.Schema.PrimaryKey])
+				if err != nil {
+					return fmt.Errorf("failed to serialize primary key: %w", err)
+				}
+			} else {
+				pkKeyBytes = make([]byte, 8)
+				binary.LittleEndian.PutUint64(pkKeyBytes, row.ID)
+			}
+
+			location, found, err := t.btree.Search(pkKeyBytes)
+			if err != nil {
+				return fmt.Errorf("failed to get row location: %w", err)
+			}
+			if !found {
+				continue // Row might have been deleted
+			}
+
+			// Add to index
+			if err := idx.Insert(keyBytes, location); err != nil {
+				return fmt.Errorf("failed to add row to index: %w", err)
+			}
+		}
+	}
+
+	t.indexes[name] = idx
+	return nil
+}
+
+// DropIndex removes a secondary index.
+func (t *Table) DropIndex(name string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if _, exists := t.indexes[name]; !exists {
+		return fmt.Errorf("index %s does not exist", name)
+	}
+
+	delete(t.indexes, name)
+	return nil
+}
+
+// GetIndex returns an index by name.
+func (t *Table) GetIndex(name string) (*storage.Index, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	idx, ok := t.indexes[name]
+	return idx, ok
+}
+
+// GetIndexForColumn returns an index that covers the given column.
+// Returns the first single-column index found, or nil if none exists.
+func (t *Table) GetIndexForColumn(columnName string) *storage.Index {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	for _, idx := range t.indexes {
+		if len(idx.Columns) == 1 && idx.Columns[0] == columnName {
+			return idx
+		}
+	}
+	return nil
+}
+
+// ListIndexes returns the names of all indexes on this table.
+func (t *Table) ListIndexes() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	names := make([]string, 0, len(t.indexes))
+	for name := range t.indexes {
+		names = append(names, name)
+	}
+	return names
+}
+
+// AddIndex adds an existing index to the table (for loading from storage).
+func (t *Table) AddIndex(idx *storage.Index) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.indexes[idx.Name] = idx
+}
+
+// buildIndexKey creates a B-tree key from the specified column values of a row.
+func (t *Table) buildIndexKey(row Row, columnIndices []int) []byte {
+	buf := bytes.NewBuffer(nil)
+	for _, colIdx := range columnIndices {
+		t.serializeValue(buf, row.Values[colIdx])
+	}
+	return buf.Bytes()
+}
+
+// GetPager returns the pager for use by index operations.
+func (t *Table) GetPager() *storage.Pager {
+	return t.pager
 }

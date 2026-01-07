@@ -152,6 +152,10 @@ func (e *Executor) Execute(stmt parser.Statement) (*Result, error) {
 		return e.executeCreateTable(s)
 	case *parser.DropTableStatement:
 		return e.executeDropTable(s)
+	case *parser.CreateIndexStatement:
+		return e.executeCreateIndex(s)
+	case *parser.DropIndexStatement:
+		return e.executeDropIndex(s)
 	case *parser.InsertStatement:
 		return e.executeInsert(s)
 	case *parser.SelectStatement:
@@ -302,6 +306,70 @@ func (e *Executor) executeDropTable(stmt *parser.DropTableStatement) (*Result, e
 
 	return &Result{
 		Message: fmt.Sprintf("Table '%s' dropped", tableName),
+	}, nil
+}
+
+// executeCreateIndex handles CREATE INDEX statements.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Creating a secondary index allows efficient lookups on non-primary-key columns.
+// The process involves:
+// 1. Validate that the table and columns exist
+// 2. Create a new B-tree for the index
+// 3. Populate the index with entries for all existing rows
+// 4. Register the index so future INSERTs/UPDATEs maintain it
+func (e *Executor) executeCreateIndex(stmt *parser.CreateIndexStatement) (*Result, error) {
+	tableName := strings.ToLower(stmt.Table)
+
+	tbl, exists := e.tables[tableName]
+	if !exists {
+		return nil, fmt.Errorf("table %s does not exist", tableName)
+	}
+
+	// Convert column names to lowercase for consistency
+	columns := make([]string, len(stmt.Columns))
+	for i, col := range stmt.Columns {
+		columns[i] = strings.ToLower(col)
+	}
+
+	// Create the index on the table
+	if err := tbl.CreateIndex(stmt.IndexName, columns, stmt.Unique); err != nil {
+		return nil, fmt.Errorf("failed to create index: %w", err)
+	}
+
+	uniqueStr := ""
+	if stmt.Unique {
+		uniqueStr = "unique "
+	}
+
+	return &Result{
+		Message: fmt.Sprintf("Created %sindex '%s' on %s(%s)",
+			uniqueStr, stmt.IndexName, tableName, strings.Join(columns, ", ")),
+	}, nil
+}
+
+// executeDropIndex handles DROP INDEX statements.
+func (e *Executor) executeDropIndex(stmt *parser.DropIndexStatement) (*Result, error) {
+	// Find which table has this index
+	var foundTable *table.Table
+	for _, tbl := range e.tables {
+		if _, exists := tbl.GetIndex(stmt.IndexName); exists {
+			foundTable = tbl
+			break
+		}
+	}
+
+	if foundTable == nil {
+		return nil, fmt.Errorf("index %s does not exist", stmt.IndexName)
+	}
+
+	if err := foundTable.DropIndex(stmt.IndexName); err != nil {
+		return nil, fmt.Errorf("failed to drop index: %w", err)
+	}
+
+	return &Result{
+		Message: fmt.Sprintf("Dropped index '%s'", stmt.IndexName),
 	}, nil
 }
 
