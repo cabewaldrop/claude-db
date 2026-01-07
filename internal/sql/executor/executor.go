@@ -414,25 +414,45 @@ func (e *Executor) executeSelect(stmt *parser.SelectStatement) (*Result, error) 
 		}
 
 	case PlanTableScan:
-		// Fall back to full table scan
-		rows, err = tbl.Scan()
-		if err != nil {
-			return nil, fmt.Errorf("scan failed: %w", err)
+		// Calculate effective limit for early exit (only when no ORDER BY)
+		// When ORDER BY is present, we need all matching rows before sorting
+		scanLimit := 0
+		if len(stmt.OrderBy) == 0 && stmt.Limit != nil {
+			scanLimit = *stmt.Limit
+			if stmt.Offset != nil {
+				scanLimit += *stmt.Offset
+			}
 		}
 
-		// Apply WHERE filter
 		if stmt.Where != nil {
-			var filteredRows []table.Row
-			for _, row := range rows {
+			// Use ScanWithFilter for push-down filtering
+			// This reduces memory by filtering during iteration, not after
+			var filterErr error
+			filter := func(row table.Row) bool {
+				if filterErr != nil {
+					return false // Stop on first error
+				}
 				match, evalErr := e.evaluateCondition(stmt.Where, row, tbl.Schema)
 				if evalErr != nil {
-					return nil, evalErr
+					filterErr = evalErr
+					return false
 				}
-				if match {
-					filteredRows = append(filteredRows, row)
-				}
+				return match
 			}
-			rows = filteredRows
+
+			rows, err = tbl.ScanWithFilter(filter, scanLimit)
+			if filterErr != nil {
+				return nil, filterErr
+			}
+		} else if scanLimit > 0 {
+			// No filter but can still use early exit with limit
+			rows, err = tbl.ScanWithFilter(func(row table.Row) bool { return true }, scanLimit)
+		} else {
+			// No filter, no early limit - use regular scan
+			rows, err = tbl.Scan()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
 		}
 	}
 

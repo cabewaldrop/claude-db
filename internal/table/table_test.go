@@ -230,13 +230,13 @@ func TestTableScanWithFilter(t *testing.T) {
 		tbl.Insert(values)
 	}
 
-	// Filter for age > 28
+	// Filter for age > 28 (limit=0 means no limit)
 	rows, err := tbl.ScanWithFilter(func(row Row) bool {
 		if len(row.Values) >= 3 {
 			return row.Values[2].Integer > 28
 		}
 		return false
-	})
+	}, 0)
 
 	if err != nil {
 		t.Fatalf("ScanWithFilter failed: %v", err)
@@ -245,6 +245,35 @@ func TestTableScanWithFilter(t *testing.T) {
 	// Should get ages 30, 35, 40
 	if len(rows) != 3 {
 		t.Errorf("expected 3 rows with age > 28, got %d", len(rows))
+	}
+}
+
+func TestScanWithFilterLimit(t *testing.T) {
+	tbl, _, cleanup := setupTestTable(t)
+	defer cleanup()
+
+	// Insert 10 rows
+	for i := 0; i < 10; i++ {
+		values := []Value{
+			{Type: parser.TypeInteger, Integer: int64(i + 1)},
+			{Type: parser.TypeText, Text: "User"},
+			{Type: parser.TypeInteger, Integer: int64(20 + i)},
+		}
+		tbl.Insert(values)
+	}
+
+	// Filter for all (age > 0) but limit to 3
+	rows, err := tbl.ScanWithFilter(func(row Row) bool {
+		return row.Values[2].Integer > 0
+	}, 3)
+
+	if err != nil {
+		t.Fatalf("ScanWithFilter with limit failed: %v", err)
+	}
+
+	// Should get exactly 3 rows even though 10 match
+	if len(rows) != 3 {
+		t.Errorf("expected 3 rows with limit=3, got %d", len(rows))
 	}
 }
 

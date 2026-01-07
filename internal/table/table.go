@@ -319,19 +319,44 @@ func (t *Table) Scan() ([]Row, error) {
 }
 
 // ScanWithFilter returns rows that match the filter function.
-func (t *Table) ScanWithFilter(filter func(Row) bool) ([]Row, error) {
-	allRows, err := t.Scan()
-	if err != nil {
-		return nil, err
-	}
+// Unlike Scan(), this filters during page iteration to reduce memory allocations.
+// If limit > 0, returns at most that many matching rows (enables early exit).
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Filtering during iteration (push-down) is more efficient than loading
+// all rows then filtering (pull-up) because:
+// 1. Memory is only allocated for matching rows
+// 2. With a LIMIT, we can stop early once satisfied
+// 3. CPU cache is used more efficiently (fewer allocations)
+func (t *Table) ScanWithFilter(filter func(Row) bool, limit int) ([]Row, error) {
+	var rows []Row
 
-	var filtered []Row
-	for _, row := range allRows {
-		if filter(row) {
-			filtered = append(filtered, row)
+	// Iterate through all data pages
+	for _, pageID := range t.dataPageIDs {
+		page, err := t.pager.GetPage(pageID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Read and filter rows from page
+		pageRows, err := t.readRowsFromPage(page)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, row := range pageRows {
+			if filter(row) {
+				rows = append(rows, row)
+				// Early exit if limit is satisfied
+				if limit > 0 && len(rows) >= limit {
+					return rows, nil
+				}
+			}
 		}
 	}
-	return filtered, nil
+
+	return rows, nil
 }
 
 // serializeRow converts a row to bytes.
