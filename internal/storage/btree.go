@@ -87,31 +87,36 @@ type BTree struct {
 //	    return err
 //	}
 type BTreeIterator struct {
-	bt         *BTree
-	startKey   []byte
-	endKey     []byte
-	inclusive  bool // true if endKey is inclusive (<=)
-	currentKey []byte
-	currentVal uint64
-	leafPageID uint32
-	keyIdx     int
-	node       *BTreeNode
-	started    bool
-	done       bool
-	err        error
+	bt             *BTree
+	startKey       []byte
+	endKey         []byte
+	startInclusive bool // true if startKey is inclusive (>=)
+	endInclusive   bool // true if endKey is inclusive (<=)
+	limit          int  // max results (0 = unlimited)
+	count          int  // results returned so far
+	currentKey     []byte
+	currentVal     uint64
+	leafPageID     uint32
+	keyIdx         int
+	node           *BTreeNode
+	started        bool
+	done           bool
+	err            error
 }
 
 // RangeScanOptions configures range scan behavior.
 type RangeScanOptions struct {
 	StartInclusive bool // Include startKey in results (default: true)
 	EndInclusive   bool // Include endKey in results (default: true)
+	Limit          int  // Maximum number of results (0 = unlimited)
 }
 
-// DefaultRangeScanOptions returns the default options (both bounds inclusive).
+// DefaultRangeScanOptions returns the default options (both bounds inclusive, unlimited).
 func DefaultRangeScanOptions() RangeScanOptions {
 	return RangeScanOptions{
 		StartInclusive: true,
 		EndInclusive:   true,
+		Limit:          0,
 	}
 }
 
@@ -624,13 +629,24 @@ func (bt *BTree) NewRangeIterator(startKey, endKey []byte) *BTreeIterator {
 // NewRangeIteratorWithOptions creates an iterator with custom options.
 func (bt *BTree) NewRangeIteratorWithOptions(startKey, endKey []byte, opts RangeScanOptions) *BTreeIterator {
 	return &BTreeIterator{
-		bt:        bt,
-		startKey:  startKey,
-		endKey:    endKey,
-		inclusive: opts.EndInclusive,
-		started:   false,
-		done:      false,
+		bt:             bt,
+		startKey:       startKey,
+		endKey:         endKey,
+		startInclusive: opts.StartInclusive,
+		endInclusive:   opts.EndInclusive,
+		limit:          opts.Limit,
+		count:          0,
+		started:        false,
+		done:           false,
 	}
+}
+
+// RangeScan returns an iterator over keys in [start, end] with the given options.
+// This is the primary method for range queries.
+// Pass nil for start to scan from the beginning.
+// Pass nil for end to scan to the end.
+func (bt *BTree) RangeScan(start, end []byte, opts RangeScanOptions) *BTreeIterator {
+	return bt.NewRangeIteratorWithOptions(start, end, opts)
 }
 
 // NewIterator creates an iterator over all keys in the B-tree.
@@ -705,17 +721,31 @@ func (it *BTreeIterator) seekStart() error {
 
 // advance moves to the next key-value pair.
 func (it *BTreeIterator) advance() bool {
+	// Check limit before advancing
+	if it.limit > 0 && it.count >= it.limit {
+		it.done = true
+		return false
+	}
+
 	it.keyIdx++
 
 	for {
 		// Check if we have more keys in current node
-		if it.keyIdx < int(it.node.numKeys) {
+		for it.keyIdx < int(it.node.numKeys) {
 			key := it.node.keys[it.keyIdx]
+
+			// Check start bound (for exclusive start)
+			if it.startKey != nil && !it.startInclusive {
+				if bytes.Equal(key, it.startKey) {
+					it.keyIdx++
+					continue
+				}
+			}
 
 			// Check end bound
 			if it.endKey != nil {
 				cmp := bytes.Compare(key, it.endKey)
-				if cmp > 0 || (cmp == 0 && !it.inclusive) {
+				if cmp > 0 || (cmp == 0 && !it.endInclusive) {
 					it.done = true
 					return false
 				}
@@ -723,6 +753,7 @@ func (it *BTreeIterator) advance() bool {
 
 			it.currentKey = key
 			it.currentVal = it.node.values[it.keyIdx]
+			it.count++
 			return true
 		}
 
@@ -749,21 +780,6 @@ func (it *BTreeIterator) advance() bool {
 		it.leafPageID = it.node.nextLeaf
 		it.node = node
 		it.keyIdx = 0
-
-		// Check first key of new node
-		if int(it.node.numKeys) > 0 {
-			key := it.node.keys[0]
-			if it.endKey != nil {
-				cmp := bytes.Compare(key, it.endKey)
-				if cmp > 0 || (cmp == 0 && !it.inclusive) {
-					it.done = true
-					return false
-				}
-			}
-			it.currentKey = key
-			it.currentVal = it.node.values[0]
-			return true
-		}
 	}
 }
 
