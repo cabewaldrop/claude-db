@@ -325,7 +325,10 @@ func TestGetRowByLocation(t *testing.T) {
 	}
 
 	// Get the location from the B-tree using the primary key
-	keyBytes := tbl.valueToBytes(values[0]) // Primary key is first column
+	keyBytes, err := tbl.valueToBytes(values[0]) // Primary key is first column
+	if err != nil {
+		t.Fatalf("valueToBytes failed: %v", err)
+	}
 	location, found, err := tbl.btree.Search(keyBytes)
 	if err != nil {
 		t.Fatalf("BTree search failed: %v", err)
@@ -384,7 +387,10 @@ func TestGetRowByLocationMultipleRows(t *testing.T) {
 
 	// Verify we can retrieve each row by its location
 	for _, td := range testData {
-		keyBytes := tbl.valueToBytes(Value{Type: parser.TypeInteger, Integer: td.id})
+		keyBytes, err := tbl.valueToBytes(Value{Type: parser.TypeInteger, Integer: td.id})
+		if err != nil {
+			t.Fatalf("valueToBytes failed for id %d: %v", td.id, err)
+		}
 		location, found, err := tbl.btree.Search(keyBytes)
 		if err != nil {
 			t.Fatalf("BTree search failed for id %d: %v", td.id, err)
@@ -513,5 +519,34 @@ func TestGetRowByPrimaryKeyNoPK(t *testing.T) {
 	_, _, err = tbl.GetRowByPrimaryKey(keyValue)
 	if err == nil {
 		t.Error("expected error for table without primary key")
+	}
+}
+
+func TestSerializeValueUnknownType(t *testing.T) {
+	tbl, _, cleanup := setupTestTable(t)
+	defer cleanup()
+
+	// Try to serialize a value with TypeUnknown - should fail
+	unknownValue := Value{Type: parser.TypeUnknown, Integer: 42}
+	_, err := tbl.valueToBytes(unknownValue)
+	if err == nil {
+		t.Error("expected error when serializing value with unknown type")
+	}
+	if err != nil && err.Error() != "unsupported type for serialization: 0" {
+		// TypeUnknown has value 0
+		t.Logf("Got expected error: %v", err)
+	}
+}
+
+func TestSerializeValueNullBypassesTypeCheck(t *testing.T) {
+	tbl, _, cleanup := setupTestTable(t)
+	defer cleanup()
+
+	// Null values should serialize successfully even with unknown type
+	// because the null flag bypasses the type-specific serialization
+	nullValue := Value{Type: parser.TypeUnknown, IsNull: true}
+	_, err := tbl.valueToBytes(nullValue)
+	if err != nil {
+		t.Errorf("null value with unknown type should serialize successfully: %v", err)
 	}
 }
