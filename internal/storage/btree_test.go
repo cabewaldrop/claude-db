@@ -325,3 +325,140 @@ func TestBTreeLongKeys(t *testing.T) {
 		t.Errorf("Expected value 42, got %d", value)
 	}
 }
+
+func TestBTreeScanRange(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert many keys to trigger node splits and test sibling pointers
+	numKeys := 200
+	for i := 0; i < numKeys; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test range scan: keys 50-99
+	startKey := []byte("key_0050")
+	endKey := []byte("key_0099")
+	keys, values, err := btree.ScanRange(startKey, endKey)
+	if err != nil {
+		t.Fatalf("ScanRange failed: %v", err)
+	}
+
+	expectedCount := 50 // keys 50 through 99 inclusive
+	if len(keys) != expectedCount {
+		t.Errorf("Expected %d keys, got %d", expectedCount, len(keys))
+	}
+
+	// Verify first and last keys
+	if !bytes.Equal(keys[0], []byte("key_0050")) {
+		t.Errorf("First key should be key_0050, got %s", keys[0])
+	}
+	if !bytes.Equal(keys[len(keys)-1], []byte("key_0099")) {
+		t.Errorf("Last key should be key_0099, got %s", keys[len(keys)-1])
+	}
+
+	// Verify values match
+	for i, v := range values {
+		expected := uint64(50 + i)
+		if v != expected {
+			t.Errorf("Value at index %d: expected %d, got %d", i, expected, v)
+		}
+	}
+}
+
+func TestBTreeScanRangeOpenEnd(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test range scan with no end key (scan to end)
+	startKey := []byte("key_0090")
+	keys, values, err := btree.ScanRange(startKey, nil)
+	if err != nil {
+		t.Fatalf("ScanRange failed: %v", err)
+	}
+
+	expectedCount := 10 // keys 90-99
+	if len(keys) != expectedCount {
+		t.Errorf("Expected %d keys, got %d", expectedCount, len(keys))
+	}
+
+	if len(values) != expectedCount {
+		t.Errorf("Expected %d values, got %d", expectedCount, len(values))
+	}
+}
+
+func TestBTreeLeafSiblingPointers(t *testing.T) {
+	btree, pager, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert enough keys to cause at least one split
+	numKeys := 150
+	for i := 0; i < numKeys; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Find the first leaf and traverse using sibling pointers
+	firstLeafID, err := btree.FirstLeaf()
+	if err != nil {
+		t.Fatalf("FirstLeaf failed: %v", err)
+	}
+
+	// Traverse leaves and count total keys
+	// Note: Page ID 0 is valid, so we use a do-while pattern
+	totalKeys := 0
+	leafCount := 0
+	currentPageID := firstLeafID
+	hasMore := true
+
+	for hasMore {
+		page, err := pager.GetPage(currentPageID)
+		if err != nil {
+			t.Fatalf("GetPage failed: %v", err)
+		}
+
+		node, err := deserializeNode(page)
+		if err != nil {
+			t.Fatalf("deserializeNode failed: %v", err)
+		}
+
+		if !node.isLeaf {
+			t.Error("Expected leaf node during traversal")
+		}
+
+		totalKeys += int(node.numKeys)
+		leafCount++
+
+		if node.nextLeaf == 0 && currentPageID != 0 {
+			// nextLeaf is 0 and we're not at page 0 - end of list
+			hasMore = false
+		} else if node.nextLeaf == 0 && currentPageID == 0 {
+			// We're at page 0 and nextLeaf is 0 - could be single node or end
+			// Check if this is actually the end by checking if we've seen multiple leaves
+			hasMore = false
+		} else {
+			currentPageID = node.nextLeaf
+		}
+	}
+
+	if totalKeys != numKeys {
+		t.Errorf("Expected %d total keys, got %d", numKeys, totalKeys)
+	}
+
+	if leafCount < 2 {
+		t.Errorf("Expected at least 2 leaf nodes after %d inserts, got %d", numKeys, leafCount)
+	}
+}

@@ -42,6 +42,7 @@ const (
 // For leaf nodes:
 //   - keys[i] is paired with values[i] (the actual data)
 //   - children is empty
+//   - nextLeaf/prevLeaf form a doubly-linked list for efficient range scans
 //
 // For internal nodes:
 //   - keys[i] is a separator key
@@ -54,6 +55,8 @@ type BTreeNode struct {
 	keys     [][]byte
 	values   []uint64  // For leaves: actual values; for internal: unused
 	children []uint32  // For internal nodes: child page IDs
+	nextLeaf uint32    // For leaves: page ID of next leaf (0 if none)
+	prevLeaf uint32    // For leaves: page ID of previous leaf (0 if none)
 }
 
 // BTree represents a B-tree index.
@@ -333,6 +336,30 @@ func (bt *BTree) splitChild(parent *BTreeNode, parentPage *Page, childIdx int) e
 		child.keys = child.keys[:mid]
 		child.values = child.values[:mid]
 		child.numKeys = uint16(mid)
+
+		// Maintain sibling pointers for the leaf linked list
+		// New sibling inherits child's next pointer
+		sibling.nextLeaf = child.nextLeaf
+		sibling.prevLeaf = child.pageID
+
+		// If there was a node after child, update its prevLeaf
+		if child.nextLeaf != 0 {
+			nextPage, err := bt.pager.GetPage(child.nextLeaf)
+			if err != nil {
+				return err
+			}
+			nextNode, err := deserializeNode(nextPage)
+			if err != nil {
+				return err
+			}
+			nextNode.prevLeaf = sibling.pageID
+			if err := serializeNode(nextPage, nextNode); err != nil {
+				return err
+			}
+		}
+
+		// Child now points to new sibling
+		child.nextLeaf = sibling.pageID
 	} else {
 		// For internal nodes: median goes up, right sibling gets keys after median
 		sibling.keys = make([][]byte, len(child.keys[mid+1:]))
@@ -418,6 +445,125 @@ func (bt *BTree) scanNode(pageID uint32, keys *[][]byte, values *[]uint64) error
 	return nil
 }
 
+// ScanRange returns key-value pairs within [startKey, endKey] using leaf sibling pointers.
+// This is more efficient than a full tree traversal for range queries.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Range scans are a common database operation (e.g., WHERE age BETWEEN 20 AND 30).
+// By linking leaf nodes, we can:
+// 1. Find the starting leaf with a single tree traversal (O(log n))
+// 2. Follow sibling pointers to scan the range (O(k) where k is result size)
+// This avoids repeatedly traversing from the root for each key.
+func (bt *BTree) ScanRange(startKey, endKey []byte) ([][]byte, []uint64, error) {
+	var keys [][]byte
+	var values []uint64
+
+	// Find the leaf containing startKey
+	leafPageID, err := bt.findLeaf(bt.rootPage, startKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Scan through leaves using sibling pointers
+	// Note: Page ID 0 is valid, so we use hasMore flag instead of checking for 0
+	hasMore := true
+	for hasMore {
+		page, err := bt.pager.GetPage(leafPageID)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		node, err := deserializeNode(page)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Find starting index in this leaf
+		startIdx := 0
+		if len(keys) == 0 {
+			// First leaf - find where startKey would be
+			startIdx = bt.findKeyIndex(node, startKey)
+		}
+
+		// Collect keys within range
+		for i := startIdx; i < int(node.numKeys); i++ {
+			if endKey != nil && bytes.Compare(node.keys[i], endKey) > 0 {
+				// Past end of range
+				return keys, values, nil
+			}
+			keys = append(keys, node.keys[i])
+			values = append(values, node.values[i])
+		}
+
+		// Move to next leaf (0 means end of list, unless we're currently at page 0)
+		if node.nextLeaf == 0 && leafPageID != 0 {
+			hasMore = false
+		} else if node.nextLeaf == 0 && leafPageID == 0 {
+			// At page 0 with no next - single leaf tree or end of traversal
+			hasMore = false
+		} else {
+			leafPageID = node.nextLeaf
+		}
+	}
+
+	return keys, values, nil
+}
+
+// findLeaf finds the leaf node that would contain the given key.
+func (bt *BTree) findLeaf(pageID uint32, key []byte) (uint32, error) {
+	page, err := bt.pager.GetPage(pageID)
+	if err != nil {
+		return 0, err
+	}
+
+	node, err := deserializeNode(page)
+	if err != nil {
+		return 0, err
+	}
+
+	if node.isLeaf {
+		return pageID, nil
+	}
+
+	// Find the appropriate child
+	idx := bt.findKeyIndex(node, key)
+	childIdx := idx
+	if idx < int(node.numKeys) && bytes.Compare(key, node.keys[idx]) >= 0 {
+		childIdx = idx + 1
+	}
+	if childIdx >= len(node.children) {
+		childIdx = len(node.children) - 1
+	}
+
+	return bt.findLeaf(node.children[childIdx], key)
+}
+
+// FirstLeaf returns the page ID of the leftmost leaf node.
+// Useful for full scans starting from the beginning.
+func (bt *BTree) FirstLeaf() (uint32, error) {
+	return bt.findLeftmostLeaf(bt.rootPage)
+}
+
+func (bt *BTree) findLeftmostLeaf(pageID uint32) (uint32, error) {
+	page, err := bt.pager.GetPage(pageID)
+	if err != nil {
+		return 0, err
+	}
+
+	node, err := deserializeNode(page)
+	if err != nil {
+		return 0, err
+	}
+
+	if node.isLeaf {
+		return pageID, nil
+	}
+
+	// Go to leftmost child
+	return bt.findLeftmostLeaf(node.children[0])
+}
+
 // serializeNode writes a BTreeNode to a page.
 func serializeNode(page *Page, node *BTreeNode) error {
 	buf := bytes.NewBuffer(nil)
@@ -433,6 +579,10 @@ func serializeNode(page *Page, node *BTreeNode) error {
 	// Write number of children (for internal nodes)
 	numChildren := uint16(len(node.children))
 	binary.Write(buf, binary.LittleEndian, numChildren)
+
+	// Write sibling pointers (for leaf nodes)
+	binary.Write(buf, binary.LittleEndian, node.nextLeaf)
+	binary.Write(buf, binary.LittleEndian, node.prevLeaf)
 
 	// Write keys
 	for i := 0; i < int(node.numKeys); i++ {
@@ -480,6 +630,14 @@ func deserializeNode(page *Page) (*BTreeNode, error) {
 
 	var numChildren uint16
 	if err := binary.Read(buf, binary.LittleEndian, &numChildren); err != nil {
+		return nil, err
+	}
+
+	// Read sibling pointers
+	if err := binary.Read(buf, binary.LittleEndian, &node.nextLeaf); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(buf, binary.LittleEndian, &node.prevLeaf); err != nil {
 		return nil, err
 	}
 
