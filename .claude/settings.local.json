@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod init:*)",
+      "Bash(mkdir:*)",
+      "Bash(./claude-db:*)",
+      "Bash(bd create:*)",
+      "Bash(bd dep add:*)"
+    ]
+  },
+  "spinnerTipsEnabled": false
+}
