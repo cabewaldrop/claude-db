@@ -227,13 +227,13 @@ func NewTable(name string, schema *Schema, pager *storage.Pager) (*Table, error)
 }
 
 // LoadTable loads an existing table from storage.
-func LoadTable(name string, schema *Schema, pager *storage.Pager, rootPage uint32) *Table {
+func LoadTable(name string, schema *Schema, pager *storage.Pager, rootPage uint32, nextRowID uint64) *Table {
 	return &Table{
 		Name:        name,
 		Schema:      schema,
 		pager:       pager,
 		btree:       storage.LoadBTree(pager, rootPage),
-		nextRowID:   1,
+		nextRowID:   nextRowID,
 		dataPageIDs: []uint32{},
 	}
 }
@@ -597,6 +597,11 @@ func (t *Table) Delete(filter func(Row) bool) (int, error) {
 // GetRootPage returns the B-tree root page for persistence.
 func (t *Table) GetRootPage() uint32 {
 	return t.btree.RootPage()
+}
+
+// GetNextRowID returns the next row ID for persistence.
+func (t *Table) GetNextRowID() uint64 {
+	return t.nextRowID
 }
 
 // GetRowByPrimaryKey retrieves a row by its primary key value.

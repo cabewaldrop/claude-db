@@ -297,7 +297,7 @@ func (c *Catalog) AddTable(name string, tbl *table.Table) error {
 	info := &TableInfo{
 		Name:       name,
 		RootPage:   tbl.GetRootPage(),
-		NextRowID:  1,
+		NextRowID:  tbl.GetNextRowID(),
 		PrimaryKey: tbl.Schema.PrimaryKey,
 		Columns:    make([]ColumnInfo, len(tbl.Schema.Columns)),
 	}
@@ -355,7 +355,7 @@ func (c *Catalog) LoadTable(name string, pager *storage.Pager) (*table.Table, er
 	}
 
 	schema := table.NewSchema(columns)
-	return table.LoadTable(name, schema, pager, info.RootPage), nil
+	return table.LoadTable(name, schema, pager, info.RootPage, info.NextRowID), nil
 }
 
 // Flush ensures all catalog changes are written to disk.
