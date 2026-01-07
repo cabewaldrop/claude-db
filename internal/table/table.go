@@ -574,6 +574,43 @@ func (t *Table) GetRootPage() uint32 {
 	return t.btree.RootPage()
 }
 
+// GetRowByPrimaryKey retrieves a row by its primary key value.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// This method uses the B-tree index for O(log n) lookup instead of
+// scanning the entire table. This is the key optimization that makes
+// indexed lookups fast:
+// 1. Convert the key value to bytes
+// 2. Search the B-tree to find the row's location
+// 3. Fetch the row directly using GetRowByLocation
+func (t *Table) GetRowByPrimaryKey(keyValue Value) (Row, bool, error) {
+	// Check if table has a primary key
+	if t.Schema.PrimaryKey < 0 {
+		return Row{}, false, errors.New("table has no primary key")
+	}
+
+	// Convert value to bytes for B-tree lookup
+	keyBytes := t.valueToBytes(keyValue)
+
+	// Search the B-tree index
+	location, found, err := t.btree.Search(keyBytes)
+	if err != nil {
+		return Row{}, false, fmt.Errorf("index search failed: %w", err)
+	}
+	if !found {
+		return Row{}, false, nil
+	}
+
+	// Fetch the row by location
+	row, err := t.GetRowByLocation(location)
+	if err != nil {
+		return Row{}, false, fmt.Errorf("failed to fetch row: %w", err)
+	}
+
+	return row, true, nil
+}
+
 // GetRowByLocation retrieves a row by its storage location.
 //
 // EDUCATIONAL NOTE:

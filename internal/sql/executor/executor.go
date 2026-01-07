@@ -370,11 +370,12 @@ func (e *Executor) executeInsert(stmt *parser.InsertStatement) (*Result, error) 
 // EDUCATIONAL NOTE:
 // -----------------
 // SELECT execution involves several steps:
-// 1. Get all rows from the table (full table scan)
-// 2. Filter rows based on WHERE clause
-// 3. Select requested columns (projection)
-// 4. Sort results if ORDER BY specified
-// 5. Apply LIMIT and OFFSET
+// 1. Plan the query (decide whether to use index or table scan)
+// 2. Fetch rows using the chosen access method
+// 3. Filter rows based on WHERE clause (if not already filtered by index)
+// 4. Select requested columns (projection)
+// 5. Sort results if ORDER BY specified
+// 6. Apply LIMIT and OFFSET
 func (e *Executor) executeSelect(stmt *parser.SelectStatement) (*Result, error) {
 	tableName := strings.ToLower(stmt.From)
 
@@ -383,25 +384,56 @@ func (e *Executor) executeSelect(stmt *parser.SelectStatement) (*Result, error) 
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
 
-	// Get all rows
-	rows, err := tbl.Scan()
-	if err != nil {
-		return nil, fmt.Errorf("scan failed: %w", err)
-	}
+	// Plan the query
+	planner := NewPlanner()
+	plan := planner.Plan(stmt, tbl.Schema)
 
-	// Apply WHERE filter
-	if stmt.Where != nil {
-		var filteredRows []table.Row
-		for _, row := range rows {
-			match, err := e.evaluateCondition(stmt.Where, row, tbl.Schema)
-			if err != nil {
-				return nil, err
+	var rows []table.Row
+	var err error
+
+	switch plan.Type {
+	case PlanIndexScan:
+		// Use B-tree index for primary key lookup
+		row, found, lookupErr := tbl.GetRowByPrimaryKey(*plan.IndexKey)
+		if lookupErr != nil {
+			return nil, fmt.Errorf("index lookup failed: %w", lookupErr)
+		}
+		if found {
+			// Still need to verify the row matches all WHERE conditions
+			// (there might be additional conditions beyond the PK equality)
+			match := true
+			if stmt.Where != nil {
+				match, err = e.evaluateCondition(stmt.Where, row, tbl.Schema)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if match {
-				filteredRows = append(filteredRows, row)
+				rows = []table.Row{row}
 			}
 		}
-		rows = filteredRows
+
+	case PlanTableScan:
+		// Fall back to full table scan
+		rows, err = tbl.Scan()
+		if err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+
+		// Apply WHERE filter
+		if stmt.Where != nil {
+			var filteredRows []table.Row
+			for _, row := range rows {
+				match, evalErr := e.evaluateCondition(stmt.Where, row, tbl.Schema)
+				if evalErr != nil {
+					return nil, evalErr
+				}
+				if match {
+					filteredRows = append(filteredRows, row)
+				}
+			}
+			rows = filteredRows
+		}
 	}
 
 	// Determine columns to return

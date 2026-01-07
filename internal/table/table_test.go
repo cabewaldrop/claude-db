@@ -429,3 +429,89 @@ func TestGetRowByLocationInvalidLocation(t *testing.T) {
 		t.Error("expected error for invalid page ID")
 	}
 }
+
+func TestGetRowByPrimaryKey(t *testing.T) {
+	tbl, _, cleanup := setupTestTable(t)
+	defer cleanup()
+
+	// Insert multiple rows
+	testData := []struct {
+		id   int64
+		name string
+		age  int64
+	}{
+		{1, "Alice", 30},
+		{5, "Bob", 25},
+		{10, "Charlie", 35},
+	}
+
+	for _, td := range testData {
+		values := []Value{
+			{Type: parser.TypeInteger, Integer: td.id},
+			{Type: parser.TypeText, Text: td.name},
+			{Type: parser.TypeInteger, Integer: td.age},
+		}
+		_, err := tbl.Insert(values)
+		if err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
+	}
+
+	// Test lookup by primary key
+	for _, td := range testData {
+		keyValue := Value{Type: parser.TypeInteger, Integer: td.id}
+		row, found, err := tbl.GetRowByPrimaryKey(keyValue)
+		if err != nil {
+			t.Fatalf("GetRowByPrimaryKey failed for id %d: %v", td.id, err)
+		}
+		if !found {
+			t.Fatalf("expected to find row with id %d", td.id)
+		}
+		if row.Values[0].Integer != td.id {
+			t.Errorf("expected id %d, got %d", td.id, row.Values[0].Integer)
+		}
+		if row.Values[1].Text != td.name {
+			t.Errorf("expected name %q, got %q", td.name, row.Values[1].Text)
+		}
+	}
+
+	// Test lookup for non-existent key
+	keyValue := Value{Type: parser.TypeInteger, Integer: 999}
+	_, found, err := tbl.GetRowByPrimaryKey(keyValue)
+	if err != nil {
+		t.Fatalf("GetRowByPrimaryKey failed: %v", err)
+	}
+	if found {
+		t.Error("expected not to find row with id 999")
+	}
+}
+
+func TestGetRowByPrimaryKeyNoPK(t *testing.T) {
+	// Create a table without a primary key
+	testFile := "test_table_nopk.db"
+	pager, err := storage.NewPager(testFile)
+	if err != nil {
+		t.Fatalf("Failed to create pager: %v", err)
+	}
+	defer func() {
+		pager.Close()
+		os.Remove(testFile)
+	}()
+
+	// Schema without primary key
+	schema := NewSchema([]parser.ColumnDefinition{
+		{Name: "id", Type: parser.TypeInteger},
+		{Name: "name", Type: parser.TypeText},
+	})
+
+	tbl, err := NewTable("nopk", schema, pager)
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	keyValue := Value{Type: parser.TypeInteger, Integer: 1}
+	_, _, err = tbl.GetRowByPrimaryKey(keyValue)
+	if err == nil {
+		t.Error("expected error for table without primary key")
+	}
+}

@@ -311,3 +311,85 @@ func TestDuplicateTable(t *testing.T) {
 		t.Errorf("expected 'already exists' in error, got %v", err)
 	}
 }
+
+func TestSelectWithPrimaryKeyIndex(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	// Create table with PRIMARY KEY
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+
+	// Insert multiple rows
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (2, 'Bob', 25)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (3, 'Charlie', 35)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (10, 'David', 40)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (100, 'Eve', 28)")
+
+	// Test PK equality lookup - this should use the index
+	result := executeSQL(t, exec, "SELECT * FROM users WHERE id = 2")
+	if len(result.Rows) != 1 {
+		t.Errorf("expected 1 row for id = 2, got %d", len(result.Rows))
+	}
+	if result.Rows[0][1].Text != "Bob" {
+		t.Errorf("expected Bob, got %s", result.Rows[0][1].Text)
+	}
+
+	// Test PK lookup for non-existent key
+	result = executeSQL(t, exec, "SELECT * FROM users WHERE id = 999")
+	if len(result.Rows) != 0 {
+		t.Errorf("expected 0 rows for id = 999, got %d", len(result.Rows))
+	}
+
+	// Test PK lookup with larger value
+	result = executeSQL(t, exec, "SELECT name FROM users WHERE id = 100")
+	if len(result.Rows) != 1 {
+		t.Errorf("expected 1 row for id = 100, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0].Text != "Eve" {
+		t.Errorf("expected Eve, got %s", result.Rows[0][0].Text)
+	}
+}
+
+func TestSelectWithPrimaryKeyAndAdditionalConditions(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active INTEGER)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, active) VALUES (1, 'Alice', 1)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, active) VALUES (2, 'Bob', 0)")
+
+	// PK lookup with additional condition that passes
+	result := executeSQL(t, exec, "SELECT * FROM users WHERE id = 1 AND active = 1")
+	if len(result.Rows) != 1 {
+		t.Errorf("expected 1 row, got %d", len(result.Rows))
+	}
+
+	// PK lookup with additional condition that fails
+	result = executeSQL(t, exec, "SELECT * FROM users WHERE id = 2 AND active = 1")
+	if len(result.Rows) != 0 {
+		t.Errorf("expected 0 rows (PK found but active != 1), got %d", len(result.Rows))
+	}
+}
+
+func TestSelectNonPKFallsBackToTableScan(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (2, 'Bob', 25)")
+	executeSQL(t, exec, "INSERT INTO users (id, name, age) VALUES (3, 'Charlie', 35)")
+
+	// Non-PK condition should still work (via table scan)
+	result := executeSQL(t, exec, "SELECT * FROM users WHERE name = 'Bob'")
+	if len(result.Rows) != 1 {
+		t.Errorf("expected 1 row for name = 'Bob', got %d", len(result.Rows))
+	}
+
+	// Range condition on PK should fall back to table scan (not implemented yet)
+	result = executeSQL(t, exec, "SELECT * FROM users WHERE id > 1")
+	if len(result.Rows) != 2 {
+		t.Errorf("expected 2 rows for id > 1, got %d", len(result.Rows))
+	}
+}
