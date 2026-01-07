@@ -16,6 +16,7 @@
 package executor
 
 import (
+	"container/heap"
 	"fmt"
 	"sort"
 	"strings"
@@ -473,24 +474,45 @@ func (e *Executor) executeSelect(stmt *parser.SelectStatement) (*Result, error) 
 		}
 	}
 
-	// Apply ORDER BY
+	// Apply ORDER BY with LIMIT optimization
+	// When LIMIT is present, use heap-based top-K selection for O(N log K) instead of O(N log N)
 	if len(stmt.OrderBy) > 0 {
-		sort.Slice(rows, func(i, j int) bool {
-			for _, clause := range stmt.OrderBy {
-				colIdx, found := tbl.Schema.GetColumnIndex(clause.Column)
-				if !found {
-					continue
-				}
-				cmp := rows[i].Values[colIdx].Compare(rows[j].Values[colIdx])
-				if cmp != 0 {
-					if clause.Descending {
-						return cmp > 0
-					}
-					return cmp < 0
-				}
+		// Calculate effective limit (including offset)
+		effectiveLimit := 0
+		if stmt.Limit != nil {
+			effectiveLimit = *stmt.Limit
+			if stmt.Offset != nil {
+				effectiveLimit += *stmt.Offset
 			}
-			return false
-		})
+		}
+
+		// Try heap-based top-K if limit is set and reasonable
+		if effectiveLimit > 0 && effectiveLimit < len(rows) {
+			topK := selectTopK(rows, effectiveLimit, stmt.OrderBy, tbl.Schema)
+			if topK != nil {
+				rows = topK
+			}
+		}
+
+		// If top-K wasn't used (returned nil) or no limit, fall back to full sort
+		if effectiveLimit == 0 || effectiveLimit >= len(rows) {
+			sort.Slice(rows, func(i, j int) bool {
+				for _, clause := range stmt.OrderBy {
+					colIdx, found := tbl.Schema.GetColumnIndex(clause.Column)
+					if !found {
+						continue
+					}
+					cmp := rows[i].Values[colIdx].Compare(rows[j].Values[colIdx])
+					if cmp != 0 {
+						if clause.Descending {
+							return cmp > 0
+						}
+						return cmp < 0
+					}
+				}
+				return false
+			})
+		}
 	}
 
 	// Apply OFFSET
@@ -857,4 +879,100 @@ func (e *Executor) GetTables() []string {
 func (e *Executor) GetTable(name string) (*table.Table, bool) {
 	tbl, ok := e.tables[strings.ToLower(name)]
 	return tbl, ok
+}
+
+// topKHeap implements a heap for ORDER BY + LIMIT optimization.
+// For ASC order, we use a max-heap: keep the K smallest rows by
+// always ejecting the largest when we exceed K.
+// For DESC order, we use a min-heap: keep the K largest rows.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// When you have ORDER BY x LIMIT K on N rows, naive sorting is O(N log N).
+// With a heap of size K, we can do O(N log K) which is much faster when K << N.
+// For example, LIMIT 10 on 1M rows: O(1M * 10) vs O(1M * 20) - roughly 2x faster.
+type topKHeap struct {
+	rows       []table.Row
+	orderBy    []parser.OrderByClause
+	schema     *table.Schema
+	descending bool // true = min-heap for DESC, false = max-heap for ASC
+}
+
+func (h *topKHeap) Len() int { return len(h.rows) }
+
+func (h *topKHeap) Less(i, j int) bool {
+	// For max-heap (ASC order): we want largest at root to eject it
+	// For min-heap (DESC order): we want smallest at root to eject it
+	for _, clause := range h.orderBy {
+		colIdx, found := h.schema.GetColumnIndex(clause.Column)
+		if !found {
+			continue
+		}
+		cmp := h.rows[i].Values[colIdx].Compare(h.rows[j].Values[colIdx])
+		if cmp != 0 {
+			// For ASC order with max-heap: larger value should be "less" so it floats to top
+			// For DESC order with min-heap: smaller value should be "less" so it floats to top
+			if h.descending {
+				return cmp < 0 // min-heap for DESC
+			}
+			return cmp > 0 // max-heap for ASC
+		}
+	}
+	return false
+}
+
+func (h *topKHeap) Swap(i, j int) {
+	h.rows[i], h.rows[j] = h.rows[j], h.rows[i]
+}
+
+func (h *topKHeap) Push(x any) {
+	h.rows = append(h.rows, x.(table.Row))
+}
+
+func (h *topKHeap) Pop() any {
+	old := h.rows
+	n := len(old)
+	x := old[n-1]
+	h.rows = old[0 : n-1]
+	return x
+}
+
+// selectTopK selects the top K rows using a heap-based algorithm.
+// This is O(N log K) instead of O(N log N) for full sort.
+func selectTopK(rows []table.Row, k int, orderBy []parser.OrderByClause, schema *table.Schema) []table.Row {
+	if k <= 0 || len(rows) == 0 {
+		return nil
+	}
+	if k >= len(rows) {
+		// No optimization needed - need all rows anyway
+		return nil // signal to use regular sort
+	}
+
+	// Determine if first ORDER BY clause is descending
+	descending := false
+	if len(orderBy) > 0 {
+		descending = orderBy[0].Descending
+	}
+
+	h := &topKHeap{
+		rows:       make([]table.Row, 0, k+1),
+		orderBy:    orderBy,
+		schema:     schema,
+		descending: descending,
+	}
+
+	for _, row := range rows {
+		heap.Push(h, row)
+		if h.Len() > k {
+			heap.Pop(h) // Remove the worst element (largest for ASC, smallest for DESC)
+		}
+	}
+
+	// Extract results in sorted order
+	result := make([]table.Row, h.Len())
+	for i := h.Len() - 1; i >= 0; i-- {
+		result[i] = heap.Pop(h).(table.Row)
+	}
+
+	return result
 }

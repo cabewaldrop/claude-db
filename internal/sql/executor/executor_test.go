@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -392,4 +393,122 @@ func TestSelectNonPKFallsBackToTableScan(t *testing.T) {
 	if len(result.Rows) != 2 {
 		t.Errorf("expected 2 rows for id > 1, got %d", len(result.Rows))
 	}
+}
+
+func TestOrderByLimit(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE scores (id INTEGER PRIMARY KEY, name TEXT, score INTEGER)")
+
+	// Insert 20 rows with varying scores (score = 21 - id, so lower ids have higher scores)
+	for i := 1; i <= 20; i++ {
+		executeSQL(t, exec, fmt.Sprintf("INSERT INTO scores (id, name, score) VALUES (%d, 'User%d', %d)", i, i, 21-i))
+	}
+
+	// Test ORDER BY ASC with LIMIT
+	result := executeSQL(t, exec, "SELECT * FROM scores ORDER BY score LIMIT 5")
+	if len(result.Rows) != 5 {
+		t.Errorf("expected 5 rows, got %d", len(result.Rows))
+	}
+	// Lowest scores should be 1, 2, 3, 4, 5 (from ids 20, 19, 18, 17, 16)
+	expectedScores := []int64{1, 2, 3, 4, 5}
+	for i, row := range result.Rows {
+		if row[2].Integer != expectedScores[i] {
+			t.Errorf("row %d: expected score %d, got %d", i, expectedScores[i], row[2].Integer)
+		}
+	}
+
+	// Test ORDER BY DESC with LIMIT
+	result = executeSQL(t, exec, "SELECT * FROM scores ORDER BY score DESC LIMIT 3")
+	if len(result.Rows) != 3 {
+		t.Errorf("expected 3 rows, got %d", len(result.Rows))
+	}
+	// Highest scores should be 20, 19, 18 (from ids 1, 2, 3)
+	expectedDescScores := []int64{20, 19, 18}
+	for i, row := range result.Rows {
+		if row[2].Integer != expectedDescScores[i] {
+			t.Errorf("row %d DESC: expected score %d, got %d", i, expectedDescScores[i], row[2].Integer)
+		}
+	}
+}
+
+func TestOrderByLimitOffset(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE items (id INTEGER PRIMARY KEY, value INTEGER)")
+	for i := 1; i <= 10; i++ {
+		executeSQL(t, exec, fmt.Sprintf("INSERT INTO items (id, value) VALUES (%d, %d)", i, i*10))
+	}
+
+	// LIMIT 3 OFFSET 2: values should be 30, 40, 50
+	result := executeSQL(t, exec, "SELECT * FROM items ORDER BY value LIMIT 3 OFFSET 2")
+	if len(result.Rows) != 3 {
+		t.Errorf("expected 3 rows, got %d", len(result.Rows))
+	}
+	expectedValues := []int64{30, 40, 50}
+	for i, row := range result.Rows {
+		if row[1].Integer != expectedValues[i] {
+			t.Errorf("row %d: expected value %d, got %d", i, expectedValues[i], row[1].Integer)
+		}
+	}
+}
+
+func BenchmarkOrderByLimit(b *testing.B) {
+	exec, cleanup := setupBenchExecutor(b)
+	defer cleanup()
+
+	// Helper to execute SQL in benchmark
+	executeBenchSQL := func(sql string) {
+		l := lexer.New(sql)
+		p := parser.New(l)
+		stmt, err := p.Parse()
+		if err != nil {
+			b.Fatalf("Parse error: %v", err)
+		}
+		if _, err := exec.Execute(stmt); err != nil {
+			b.Fatalf("Execute error: %v", err)
+		}
+	}
+
+	// Create table with 10k rows
+	executeBenchSQL("CREATE TABLE bench (id INTEGER PRIMARY KEY, value INTEGER)")
+	for i := 0; i < 10000; i++ {
+		executeBenchSQL(fmt.Sprintf("INSERT INTO bench (id, value) VALUES (%d, %d)", i, 10000-i))
+	}
+
+	// Pre-parse the benchmark query
+	l := lexer.New("SELECT * FROM bench ORDER BY value LIMIT 10")
+	p := parser.New(l)
+	selectStmt, err := p.Parse()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := exec.Execute(selectStmt)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func setupBenchExecutor(b *testing.B) (*Executor, func()) {
+	b.Helper()
+	testFile := "bench_executor.db"
+	pager, err := storage.NewPager(testFile)
+	if err != nil {
+		b.Fatalf("Failed to create pager: %v", err)
+	}
+
+	exec := New(pager)
+
+	cleanup := func() {
+		pager.Close()
+		os.Remove(testFile)
+	}
+
+	return exec, cleanup
 }
