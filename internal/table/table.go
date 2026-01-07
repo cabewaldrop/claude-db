@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/cabewaldrop/claude-db/internal/sql/parser"
 	"github.com/cabewaldrop/claude-db/internal/storage"
@@ -179,7 +180,9 @@ func (s *Schema) GetColumnIndex(name string) (int, bool) {
 }
 
 // Table represents a database table with its schema and data.
+// Table is safe for concurrent use by multiple goroutines.
 type Table struct {
+	mu     sync.RWMutex // Protects all fields below
 	Name   string
 	Schema *Schema
 
@@ -249,6 +252,9 @@ func LoadTable(name string, schema *Schema, pager *storage.Pager, rootPage uint3
 // 4. Store in a data page
 // 5. Add to primary key index (B-tree)
 func (t *Table) Insert(values []Value) (uint64, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	// Validate column count
 	if len(values) != len(t.Schema.Columns) {
 		return 0, fmt.Errorf("expected %d values, got %d", len(t.Schema.Columns), len(values))
@@ -298,6 +304,9 @@ func (t *Table) Insert(values []Value) (uint64, error) {
 
 // Scan returns all rows in the table.
 func (t *Table) Scan() ([]Row, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	var rows []Row
 
 	// Iterate through all data pages
@@ -596,17 +605,26 @@ func (t *Table) Delete(filter func(Row) bool) (int, error) {
 
 // GetRootPage returns the B-tree root page for persistence.
 func (t *Table) GetRootPage() uint32 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.btree.RootPage()
 }
 
 // GetNextRowID returns the next row ID for persistence.
 func (t *Table) GetNextRowID() uint64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.nextRowID
 }
 
 // GetDataPageIDs returns the list of data page IDs for persistence.
 func (t *Table) GetDataPageIDs() []uint32 {
-	return t.dataPageIDs
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	// Return a copy to prevent caller from modifying internal state
+	result := make([]uint32, len(t.dataPageIDs))
+	copy(result, t.dataPageIDs)
+	return result
 }
 
 // GetRowByPrimaryKey retrieves a row by its primary key value.
@@ -620,6 +638,9 @@ func (t *Table) GetDataPageIDs() []uint32 {
 // 2. Search the B-tree to find the row's location
 // 3. Fetch the row directly using GetRowByLocation
 func (t *Table) GetRowByPrimaryKey(keyValue Value) (Row, bool, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	// Check if table has a primary key
 	if t.Schema.PrimaryKey < 0 {
 		return Row{}, false, errors.New("table has no primary key")
@@ -637,8 +658,8 @@ func (t *Table) GetRowByPrimaryKey(keyValue Value) (Row, bool, error) {
 		return Row{}, false, nil
 	}
 
-	// Fetch the row by location
-	row, err := t.GetRowByLocation(location)
+	// Fetch the row by location (already holding lock)
+	row, err := t.getRowByLocationLocked(location)
 	if err != nil {
 		return Row{}, false, fmt.Errorf("failed to fetch row: %w", err)
 	}
@@ -657,6 +678,13 @@ func (t *Table) GetRowByPrimaryKey(keyValue Value) (Row, bool, error) {
 // This allows efficient O(1) row retrieval when we know the location
 // from an index lookup, avoiding a full table scan.
 func (t *Table) GetRowByLocation(location uint64) (Row, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.getRowByLocationLocked(location)
+}
+
+// getRowByLocationLocked is the internal implementation that assumes the lock is held.
+func (t *Table) getRowByLocationLocked(location uint64) (Row, error) {
 	// Extract page ID and offset from location
 	pageID := uint32(location >> 32)
 	offset := uint16(location & 0xFFFFFFFF)

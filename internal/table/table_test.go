@@ -544,3 +544,76 @@ func TestGetRowByPrimaryKeyNoPK(t *testing.T) {
 		t.Error("expected error for table without primary key")
 	}
 }
+
+func TestConcurrentInserts(t *testing.T) {
+	testFile := "test_concurrent.db"
+	pager, err := storage.NewPager(testFile)
+	if err != nil {
+		t.Fatalf("Failed to create pager: %v", err)
+	}
+	defer func() {
+		pager.Close()
+		os.Remove(testFile)
+	}()
+
+	schema := NewSchema([]parser.ColumnDefinition{
+		{Name: "id", Type: parser.TypeInteger, PrimaryKey: true},
+		{Name: "name", Type: parser.TypeText},
+	})
+
+	tbl, err := NewTable("concurrent", schema, pager)
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Launch multiple goroutines to insert concurrently
+	numGoroutines := 10
+	insertsPerGoroutine := 10
+	done := make(chan []uint64, numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		go func(goroutineID int) {
+			var rowIDs []uint64
+			for i := 0; i < insertsPerGoroutine; i++ {
+				id := goroutineID*1000 + i
+				rowID, err := tbl.Insert([]Value{
+					{Type: parser.TypeInteger, Integer: int64(id)},
+					{Type: parser.TypeText, Text: "user"},
+				})
+				if err != nil {
+					t.Errorf("Insert failed: %v", err)
+					continue
+				}
+				rowIDs = append(rowIDs, rowID)
+			}
+			done <- rowIDs
+		}(g)
+	}
+
+	// Collect all row IDs
+	allRowIDs := make(map[uint64]bool)
+	for g := 0; g < numGoroutines; g++ {
+		rowIDs := <-done
+		for _, id := range rowIDs {
+			if allRowIDs[id] {
+				t.Errorf("Duplicate row ID: %d", id)
+			}
+			allRowIDs[id] = true
+		}
+	}
+
+	// Verify all inserts completed with unique IDs
+	expectedCount := numGoroutines * insertsPerGoroutine
+	if len(allRowIDs) != expectedCount {
+		t.Errorf("Expected %d unique row IDs, got %d", expectedCount, len(allRowIDs))
+	}
+
+	// Verify scan works and returns correct count
+	rows, err := tbl.Scan()
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	if len(rows) != expectedCount {
+		t.Errorf("Expected %d rows from scan, got %d", expectedCount, len(rows))
+	}
+}
