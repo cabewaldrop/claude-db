@@ -69,6 +69,7 @@ type QueryPlan struct {
 	LowerInclusive bool        // True if lower bound is inclusive (>=)
 	UpperInclusive bool        // True if upper bound is inclusive (<=)
 	EstimatedCost  float64     // Relative cost estimate (lower is better)
+	EstimatedRows  float64     // Estimated number of rows returned
 }
 
 // String returns a human-readable representation of the query plan.
@@ -398,4 +399,101 @@ func (p *Planner) containsOR(expr parser.Expression) bool {
 		return p.containsOR(e.Left) || p.containsOR(e.Right)
 	}
 	return false
+}
+
+// PlanSelectWithStats generates a query plan using table statistics.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Statistics-based planning is the foundation of cost-based query optimization.
+// By knowing how many rows a table has and how selective predicates are,
+// the planner can estimate the cost of different access paths and choose
+// the cheapest one.
+func (p *Planner) PlanSelectWithStats(stmt *parser.SelectStatement, schema *table.Schema, stats *table.TableStats, indexStats *table.IndexStats) *QueryPlan {
+	plan := p.PlanSelect(stmt, schema)
+
+	// Apply selectivity estimation if we have stats
+	if stats != nil && stats.RowCount > 0 {
+		rowCount := float64(stats.RowCount)
+
+		// Estimate rows based on predicates
+		for _, pred := range plan.Predicates {
+			sel := p.EstimateSelectivity(pred, indexStats)
+			rowCount *= sel
+		}
+
+		// Ensure at least 1 row estimated
+		if rowCount < 1 {
+			rowCount = 1
+		}
+		plan.EstimatedRows = rowCount
+
+		// Update cost estimate based on row count
+		switch plan.AccessMethod {
+		case IndexLookup:
+			// Index lookup is very cheap - O(log n) to find + 1 row
+			plan.EstimatedCost = 1.0
+		case IndexRangeScan:
+			// Range scan: O(log n) to find start + read matching rows
+			plan.EstimatedCost = 2.0 + plan.EstimatedRows*0.1
+		case FullTableScan:
+			// Full scan: read all rows
+			plan.EstimatedCost = float64(stats.RowCount)
+		}
+	}
+
+	return plan
+}
+
+// EstimateSelectivity estimates what fraction of rows will match a predicate.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Selectivity estimation is a key part of query optimization:
+// - Selectivity of 0.1 means 10% of rows match
+// - For equality on unique column: 1/distinct_values
+// - For range predicates: typically assume 30% (conservative)
+// - For inequality: 1 - equality_selectivity
+func (p *Planner) EstimateSelectivity(pred Predicate, indexStats *table.IndexStats) float64 {
+	switch pred.Operator {
+	case parser.OpEquals:
+		// Equality: assume uniform distribution
+		// selectivity = 1 / distinctValues
+		if indexStats != nil && indexStats.DistinctKeys > 0 {
+			return 1.0 / float64(indexStats.DistinctKeys)
+		}
+		return 0.1 // Default 10%
+
+	case parser.OpLessThan, parser.OpLessOrEqual, parser.OpGreaterThan, parser.OpGreaterOrEqual:
+		// Range: assume 30% selectivity (conservative)
+		return 0.3
+
+	case parser.OpNotEquals:
+		// Not equal: 1 - equality selectivity
+		if indexStats != nil && indexStats.DistinctKeys > 0 {
+			return 1.0 - (1.0 / float64(indexStats.DistinctKeys))
+		}
+		return 0.9 // Default 90%
+
+	default:
+		return 0.5
+	}
+}
+
+// EstimateRows estimates the number of rows returned by a query plan.
+func (p *Planner) EstimateRows(plan *QueryPlan, stats *table.TableStats, indexStats *table.IndexStats) float64 {
+	if stats == nil || stats.RowCount == 0 {
+		return 0
+	}
+
+	rows := float64(stats.RowCount)
+	for _, pred := range plan.Predicates {
+		rows *= p.EstimateSelectivity(pred, indexStats)
+	}
+
+	// At least 1 row estimated
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
 }

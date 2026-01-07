@@ -652,3 +652,80 @@ func TestSerializeValueNullBypassesTypeCheck(t *testing.T) {
 		t.Errorf("null value with unknown type should serialize successfully: %v", err)
 	}
 }
+
+func TestRowCountMaintained(t *testing.T) {
+	tbl, _, cleanup := setupTestTable(t)
+	defer cleanup()
+
+	// Initially should be 0
+	stats := tbl.Stats()
+	if stats.RowCount != 0 {
+		t.Errorf("expected initial RowCount 0, got %d", stats.RowCount)
+	}
+
+	// Insert first row
+	values := []Value{
+		{Type: parser.TypeInteger, Integer: 1},
+		{Type: parser.TypeText, Text: "Alice"},
+		{Type: parser.TypeInteger, Integer: 30},
+	}
+	_, err := tbl.Insert(values)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	stats = tbl.Stats()
+	if stats.RowCount != 1 {
+		t.Errorf("expected RowCount 1, got %d", stats.RowCount)
+	}
+
+	// Insert more rows
+	values[0].Integer = 2
+	tbl.Insert(values)
+	values[0].Integer = 3
+	tbl.Insert(values)
+
+	stats = tbl.Stats()
+	if stats.RowCount != 3 {
+		t.Errorf("expected RowCount 3, got %d", stats.RowCount)
+	}
+}
+
+func TestAnalyze(t *testing.T) {
+	tbl, _, cleanup := setupTestTable(t)
+	defer cleanup()
+
+	// Insert some rows
+	for i := 1; i <= 5; i++ {
+		values := []Value{
+			{Type: parser.TypeInteger, Integer: int64(i)},
+			{Type: parser.TypeText, Text: "User"},
+			{Type: parser.TypeInteger, Integer: int64(20 + i)},
+		}
+		_, err := tbl.Insert(values)
+		if err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
+	}
+
+	// Run analyze
+	err := tbl.Analyze()
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Check stats were updated
+	stats := tbl.Stats()
+	if stats.RowCount != 5 {
+		t.Errorf("expected RowCount 5 after ANALYZE, got %d", stats.RowCount)
+	}
+	if stats.LastAnalyzed.IsZero() {
+		t.Error("expected LastAnalyzed to be set after ANALYZE")
+	}
+
+	// Check index stats
+	indexStats := tbl.IndexStats()
+	if indexStats.DistinctKeys != 5 {
+		t.Errorf("expected 5 distinct keys, got %d", indexStats.DistinctKeys)
+	}
+}

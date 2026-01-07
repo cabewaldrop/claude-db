@@ -67,6 +67,7 @@ const (
 	TokenLimit
 	TokenOffset
 	TokenExplain
+	TokenAnalyze
 
 	// Data types
 	TokenInt
@@ -208,6 +209,7 @@ var keywords = map[string]TokenType{
 	"LIMIT":   TokenLimit,
 	"OFFSET":  TokenOffset,
 	"EXPLAIN": TokenExplain,
+	"ANALYZE": TokenAnalyze,
 	"INT":     TokenInt,
 	"INTEGER": TokenInteger,
 	"TEXT":    TokenText,

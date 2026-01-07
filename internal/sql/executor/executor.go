@@ -162,6 +162,8 @@ func (e *Executor) Execute(stmt parser.Statement) (*Result, error) {
 		return e.executeDelete(s)
 	case *parser.ExplainStatement:
 		return e.Explain(s.Statement)
+	case *parser.AnalyzeStatement:
+		return e.executeAnalyze(s)
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}
@@ -656,6 +658,47 @@ func (e *Executor) executeDelete(stmt *parser.DeleteStatement) (*Result, error) 
 	return &Result{
 		Message:  fmt.Sprintf("Deleted %d rows", deleteCount),
 		RowCount: deleteCount,
+	}, nil
+}
+
+// executeAnalyze handles ANALYZE statements.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// ANALYZE refreshes table statistics used by the query planner.
+// These statistics help the planner make better decisions about
+// which access method to use (index lookup vs table scan).
+func (e *Executor) executeAnalyze(stmt *parser.AnalyzeStatement) (*Result, error) {
+	if stmt.Table != "" {
+		// Analyze a specific table
+		tableName := strings.ToLower(stmt.Table)
+		tbl, exists := e.tables[tableName]
+		if !exists {
+			return nil, fmt.Errorf("table %s does not exist", tableName)
+		}
+
+		if err := tbl.Analyze(); err != nil {
+			return nil, fmt.Errorf("failed to analyze table %s: %w", tableName, err)
+		}
+
+		stats := tbl.Stats()
+		return &Result{
+			Message: fmt.Sprintf("Analyzed table '%s': %d rows, %d pages",
+				tableName, stats.RowCount, stats.PageCount),
+		}, nil
+	}
+
+	// Analyze all tables
+	var analyzed []string
+	for name, tbl := range e.tables {
+		if err := tbl.Analyze(); err != nil {
+			return nil, fmt.Errorf("failed to analyze table %s: %w", name, err)
+		}
+		analyzed = append(analyzed, name)
+	}
+
+	return &Result{
+		Message: fmt.Sprintf("Analyzed %d table(s)", len(analyzed)),
 	}, nil
 }
 

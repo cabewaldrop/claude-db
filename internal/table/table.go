@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cabewaldrop/claude-db/internal/sql/parser"
 	"github.com/cabewaldrop/claude-db/internal/storage"
@@ -179,6 +180,26 @@ func (s *Schema) GetColumnIndex(name string) (int, bool) {
 	return idx, ok
 }
 
+// TableStats holds statistics about a table for query planning.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Table statistics are crucial for query optimization. The planner uses them
+// to estimate how many rows will match a predicate and choose the best access
+// method. Without statistics, the planner must use rough estimates.
+type TableStats struct {
+	RowCount     int64     // Number of rows in the table
+	PageCount    int       // Number of data pages
+	LastAnalyzed time.Time // When ANALYZE was last run
+}
+
+// IndexStats holds statistics about an index.
+type IndexStats struct {
+	DistinctKeys int64 // Approximate number of distinct key values
+	LeafPages    int   // Number of leaf pages in B-tree
+	TreeHeight   int   // Depth of the B-tree
+}
+
 // Table represents a database table with its schema and data.
 // Table is safe for concurrent use by multiple goroutines.
 type Table struct {
@@ -192,6 +213,10 @@ type Table struct {
 	nextRowID    uint64
 	dataPageIDs  []uint32 // List of data page IDs
 	metadataPage uint32   // Page storing table metadata
+
+	// Statistics for query planning
+	stats      TableStats
+	indexStats IndexStats
 }
 
 // TableMetadata stores table information for persistence.
@@ -304,6 +329,9 @@ func (t *Table) Insert(values []Value) (uint64, error) {
 	if err := t.btree.Insert(keyBytes, location); err != nil {
 		return 0, fmt.Errorf("failed to insert into index: %w", err)
 	}
+
+	// Update statistics
+	t.stats.RowCount++
 
 	return rowID, nil
 }
@@ -749,4 +777,82 @@ func (t *Table) getRowByLocationLocked(location uint64) (Row, error) {
 	}
 
 	return row, nil
+}
+
+// Stats returns a copy of the table's statistics.
+func (t *Table) Stats() TableStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.stats
+}
+
+// IndexStats returns a copy of the index statistics.
+func (t *Table) IndexStats() IndexStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.indexStats
+}
+
+// Analyze refreshes the table's statistics by scanning the data.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// ANALYZE is typically run periodically or after bulk data changes.
+// It updates statistics that help the query planner make better decisions.
+// For large tables, real databases often use sampling instead of full scans.
+func (t *Table) Analyze() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Count rows (for large tables, we might sample instead)
+	rowCount := int64(0)
+	for _, pageID := range t.dataPageIDs {
+		page, err := t.pager.GetPage(pageID)
+		if err != nil {
+			continue
+		}
+		pageRows, err := t.readRowsFromPage(page)
+		if err == nil {
+			rowCount += int64(len(pageRows))
+		}
+	}
+
+	// Update table stats
+	t.stats.RowCount = rowCount
+	t.stats.PageCount = len(t.dataPageIDs)
+	t.stats.LastAnalyzed = time.Now()
+
+	// Update index stats - count distinct keys and estimate tree height
+	keys, _, err := t.btree.Scan()
+	if err == nil {
+		t.indexStats.DistinctKeys = countDistinct(keys)
+		t.indexStats.LeafPages = len(t.dataPageIDs) // Approximate
+		t.indexStats.TreeHeight = estimateTreeHeight(len(keys))
+	}
+
+	return nil
+}
+
+// countDistinct counts the number of distinct byte slices.
+func countDistinct(keys [][]byte) int64 {
+	seen := make(map[string]struct{})
+	for _, k := range keys {
+		seen[string(k)] = struct{}{}
+	}
+	return int64(len(seen))
+}
+
+// estimateTreeHeight estimates B-tree height based on key count.
+// Height = log_branching_factor(n), with branching factor ~100.
+func estimateTreeHeight(keyCount int) int {
+	if keyCount <= 0 {
+		return 1
+	}
+	height := 1
+	capacity := 100 // Approximate branching factor
+	for capacity < keyCount {
+		capacity *= 100
+		height++
+	}
+	return height
 }

@@ -203,6 +203,21 @@ func (s *ExplainStatement) String() string {
 	return fmt.Sprintf("EXPLAIN %s", s.Statement)
 }
 
+// AnalyzeStatement represents an ANALYZE query.
+// ANALYZE refreshes table statistics for query planning.
+type AnalyzeStatement struct {
+	Table string // Empty string means analyze all tables
+}
+
+func (s *AnalyzeStatement) node()      {}
+func (s *AnalyzeStatement) statement() {}
+func (s *AnalyzeStatement) String() string {
+	if s.Table == "" {
+		return "ANALYZE"
+	}
+	return fmt.Sprintf("ANALYZE %s", s.Table)
+}
+
 // ============================================================================
 // Expressions
 // ============================================================================
