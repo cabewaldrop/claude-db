@@ -573,3 +573,54 @@ func (t *Table) Delete(filter func(Row) bool) (int, error) {
 func (t *Table) GetRootPage() uint32 {
 	return t.btree.RootPage()
 }
+
+// GetRowByLocation retrieves a row by its storage location.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// The location is a uint64 that encodes both the page ID and offset:
+//   - Upper 32 bits: page ID
+//   - Lower 32 bits: offset within the page
+//
+// This allows efficient O(1) row retrieval when we know the location
+// from an index lookup, avoiding a full table scan.
+func (t *Table) GetRowByLocation(location uint64) (Row, error) {
+	// Extract page ID and offset from location
+	pageID := uint32(location >> 32)
+	offset := uint16(location & 0xFFFFFFFF)
+
+	// Fetch the page
+	page, err := t.pager.GetPage(pageID)
+	if err != nil {
+		return Row{}, fmt.Errorf("failed to get page %d: %w", pageID, err)
+	}
+
+	data := page.GetData()
+
+	// Validate offset is within bounds
+	if int(offset)+2 > len(data) {
+		return Row{}, fmt.Errorf("invalid offset %d: exceeds page data bounds", offset)
+	}
+
+	// Read the row length (2-byte prefix)
+	length := binary.LittleEndian.Uint16(data[offset:])
+	if length == 0 {
+		return Row{}, errors.New("invalid row: zero length")
+	}
+
+	// Validate we have enough data for the row
+	rowStart := int(offset) + 2
+	rowEnd := rowStart + int(length)
+	if rowEnd > len(data) {
+		return Row{}, fmt.Errorf("invalid row length %d at offset %d: exceeds page bounds", length, offset)
+	}
+
+	// Read and deserialize the row
+	rowData := data[rowStart:rowEnd]
+	row, err := t.deserializeRow(rowData)
+	if err != nil {
+		return Row{}, fmt.Errorf("failed to deserialize row: %w", err)
+	}
+
+	return row, nil
+}
