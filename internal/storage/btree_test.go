@@ -698,3 +698,369 @@ func TestBTreeIteratorRangeOpenEnd(t *testing.T) {
 		t.Errorf("Expected %d keys, got %d", expectedCount, count)
 	}
 }
+
+// --- Edge case tests from spec ---
+
+func TestRangeScanWithLimit(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test with limit
+	opts := RangeScanOptions{
+		StartInclusive: true,
+		EndInclusive:   true,
+		Limit:          5,
+	}
+	iter := btree.RangeScan(nil, nil, opts)
+	defer iter.Close()
+
+	var results []int
+	for iter.Next() {
+		// Extract number from key
+		var n int
+		fmt.Sscanf(string(iter.Key()), "key_%04d", &n)
+		results = append(results, n)
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if len(results) != 5 {
+		t.Errorf("Expected 5 results with limit, got %d", len(results))
+	}
+
+	// Should be first 5 keys: 0, 1, 2, 3, 4
+	expected := []int{0, 1, 2, 3, 4}
+	for i, v := range results {
+		if v != expected[i] {
+			t.Errorf("Result %d: expected %d, got %d", i, expected[i], v)
+		}
+	}
+}
+
+func TestRangeScanEmptyRange(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test with start > end (should return no results)
+	startKey := []byte("key_0050")
+	endKey := []byte("key_0040")
+	iter := btree.RangeScan(startKey, endKey, DefaultRangeScanOptions())
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("Expected 0 results for empty range (start > end), got %d", count)
+	}
+}
+
+func TestRangeScanNoMatches(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test range outside data (keys 200-300 don't exist)
+	startKey := []byte("key_0200")
+	endKey := []byte("key_0300")
+	iter := btree.RangeScan(startKey, endKey, DefaultRangeScanOptions())
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("Expected 0 results for range outside data, got %d", count)
+	}
+}
+
+func TestRangeScanSingleResult(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test single key range (50 to 50, inclusive)
+	key := []byte("key_0050")
+	iter := btree.RangeScan(key, key, DefaultRangeScanOptions())
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		if string(iter.Key()) != "key_0050" {
+			t.Errorf("Expected key_0050, got %s", iter.Key())
+		}
+		if iter.Value() != 50 {
+			t.Errorf("Expected value 50, got %d", iter.Value())
+		}
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("Expected 1 result for single key range, got %d", count)
+	}
+}
+
+func TestRangeScanExclusiveStart(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test exclusive start: (10, 20] should give 11-20 (10 results)
+	startKey := []byte("key_0010")
+	endKey := []byte("key_0020")
+	opts := RangeScanOptions{
+		StartInclusive: false,
+		EndInclusive:   true,
+	}
+	iter := btree.RangeScan(startKey, endKey, opts)
+	defer iter.Close()
+
+	count := 0
+	firstKey := ""
+	lastKey := ""
+	for iter.Next() {
+		if count == 0 {
+			firstKey = string(iter.Key())
+		}
+		lastKey = string(iter.Key())
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if count != 10 {
+		t.Errorf("Expected 10 results (exclusive start), got %d", count)
+	}
+	if firstKey != "key_0011" {
+		t.Errorf("Expected first key key_0011 (exclusive start), got %s", firstKey)
+	}
+	if lastKey != "key_0020" {
+		t.Errorf("Expected last key key_0020 (inclusive end), got %s", lastKey)
+	}
+}
+
+func TestRangeScanBothExclusive(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test both exclusive: (10, 20) should give 11-19 (9 results)
+	startKey := []byte("key_0010")
+	endKey := []byte("key_0020")
+	opts := RangeScanOptions{
+		StartInclusive: false,
+		EndInclusive:   false,
+	}
+	iter := btree.RangeScan(startKey, endKey, opts)
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if count != 9 {
+		t.Errorf("Expected 9 results (both exclusive), got %d", count)
+	}
+}
+
+func TestRangeScanIteratorAfterClose(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert some keys
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	iter := btree.RangeScan(nil, nil, DefaultRangeScanOptions())
+
+	// Read a few
+	iter.Next()
+	iter.Next()
+
+	// Close early
+	iter.Close()
+
+	// Next should return false after close
+	if iter.Next() {
+		t.Error("Next() should return false after Close()")
+	}
+
+	// Err should be nil (clean close, not error)
+	if iter.Err() != nil {
+		t.Errorf("Err() should be nil after Close(), got %v", iter.Err())
+	}
+}
+
+func TestRangeScanOpenStart(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test nil start, end at 9 (inclusive): should get 0-9 (10 results)
+	endKey := []byte("key_0009")
+	iter := btree.RangeScan(nil, endKey, DefaultRangeScanOptions())
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if count != 10 {
+		t.Errorf("Expected 10 results for open start, got %d", count)
+	}
+}
+
+func TestRangeScanUsesSiblingPointers(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert enough keys to have multiple leaves
+	numKeys := 300
+	for i := 0; i < numKeys; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Range scan 50-250 inclusive
+	startKey := []byte("key_0050")
+	endKey := []byte("key_0250")
+	iter := btree.RangeScan(startKey, endKey, DefaultRangeScanOptions())
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	expectedCount := 201 // 50 to 250 inclusive
+	if count != expectedCount {
+		t.Errorf("Expected %d results, got %d", expectedCount, count)
+	}
+}
+
+func BenchmarkRangeScan(b *testing.B) {
+	testFile := "bench_btree.db"
+	pager, err := NewPager(testFile)
+	if err != nil {
+		b.Fatalf("Failed to create pager: %v", err)
+	}
+	defer func() {
+		pager.Close()
+		os.Remove(testFile)
+	}()
+
+	btree, err := NewBTree(pager)
+	if err != nil {
+		b.Fatalf("Failed to create B-tree: %v", err)
+	}
+
+	// Insert 100k keys
+	for i := 0; i < 100000; i++ {
+		key := []byte(fmt.Sprintf("key_%06d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			b.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	startKey := []byte("key_001000")
+	endKey := []byte("key_002000")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		iter := btree.RangeScan(startKey, endKey, DefaultRangeScanOptions())
+		for iter.Next() {
+		}
+		iter.Close()
+	}
+}
