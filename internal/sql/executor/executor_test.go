@@ -393,3 +393,123 @@ func TestSelectNonPKFallsBackToTableScan(t *testing.T) {
 		t.Errorf("expected 2 rows for id > 1, got %d", len(result.Rows))
 	}
 }
+
+func TestExplainSelect(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	executeSQL(t, exec, "INSERT INTO users (id, name) VALUES (1, 'Alice')")
+
+	// EXPLAIN SELECT with PK equality should show index lookup
+	result := executeSQL(t, exec, "EXPLAIN SELECT * FROM users WHERE id = 5")
+	if len(result.Rows) == 0 {
+		t.Error("expected EXPLAIN to return plan information")
+	}
+
+	// Check that we have column headers
+	if len(result.Columns) != 2 {
+		t.Errorf("expected 2 columns in EXPLAIN output, got %d", len(result.Columns))
+	}
+
+	// The result should contain plan information
+	output := result.String()
+	if !strings.Contains(output, "Query Plan") && !strings.Contains(output, "Access Method") {
+		t.Errorf("expected EXPLAIN output to contain plan info, got: %s", output)
+	}
+}
+
+func TestExplainTableScan(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+	// EXPLAIN SELECT on non-indexed column should show table scan
+	result := executeSQL(t, exec, "EXPLAIN SELECT * FROM users WHERE name = 'Alice'")
+
+	output := result.String()
+	// Should indicate a full table scan since 'name' is not indexed
+	if !strings.Contains(output, "FULL_TABLE_SCAN") {
+		t.Errorf("expected FULL_TABLE_SCAN for non-indexed column query, got: %s", output)
+	}
+}
+
+func TestExplainNonExistentTable(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	l := lexer.New("EXPLAIN SELECT * FROM nosuchtable")
+	p := parser.New(l)
+	stmt, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	_, err = exec.Execute(stmt)
+	if err == nil {
+		t.Error("expected error for EXPLAIN on non-existent table")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("expected 'does not exist' error, got: %v", err)
+	}
+}
+
+func TestExplainDoesNotExecute(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	executeSQL(t, exec, "INSERT INTO users (id, name) VALUES (1, 'Alice')")
+
+	// Verify the row exists
+	result := executeSQL(t, exec, "SELECT * FROM users")
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row before EXPLAIN DELETE, got %d", len(result.Rows))
+	}
+
+	// EXPLAIN DELETE should NOT actually delete (it will error since we only support SELECT for now)
+	// But we need to check the row still exists after attempting
+	l := lexer.New("EXPLAIN DELETE FROM users WHERE id = 1")
+	p := parser.New(l)
+	stmt, _ := p.Parse()
+
+	// This may error (since EXPLAIN only supports SELECT), but we need to verify
+	// the row wasn't deleted
+	exec.Execute(stmt)
+
+	// Row should still exist
+	result = executeSQL(t, exec, "SELECT * FROM users")
+	if len(result.Rows) != 1 {
+		t.Errorf("EXPLAIN should not execute the statement - expected 1 row, got %d", len(result.Rows))
+	}
+}
+
+func TestExplainParsing(t *testing.T) {
+	// Test that EXPLAIN parses correctly for various statement types
+	testCases := []string{
+		"EXPLAIN SELECT * FROM users",
+		"EXPLAIN SELECT id, name FROM users WHERE id = 1",
+		"EXPLAIN SELECT * FROM users WHERE name = 'Alice' AND id > 5",
+	}
+
+	for _, sql := range testCases {
+		l := lexer.New(sql)
+		p := parser.New(l)
+		stmt, err := p.Parse()
+		if err != nil {
+			t.Errorf("Parse error for %q: %v", sql, err)
+			continue
+		}
+
+		explainStmt, ok := stmt.(*parser.ExplainStatement)
+		if !ok {
+			t.Errorf("expected ExplainStatement for %q, got %T", sql, stmt)
+			continue
+		}
+
+		if explainStmt.Statement == nil {
+			t.Errorf("expected inner statement for %q", sql)
+		}
+	}
+}

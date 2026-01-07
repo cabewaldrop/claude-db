@@ -111,6 +111,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseCreateStatement()
 	case lexer.TokenDrop:
 		return p.parseDropStatement()
+	case lexer.TokenExplain:
+		return p.parseExplainStatement()
 	default:
 		p.errors = append(p.errors, fmt.Sprintf("unexpected token: %s", p.curToken.Literal))
 		return nil
@@ -486,6 +488,28 @@ func (p *Parser) parseDropStatement() Statement {
 		return nil
 	}
 	stmt.Table = p.curToken.Literal
+
+	return stmt
+}
+
+// parseExplainStatement parses: EXPLAIN <statement>
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// EXPLAIN shows the query plan without executing the query.
+// It wraps another statement (SELECT, UPDATE, DELETE) to explain.
+func (p *Parser) parseExplainStatement() *ExplainStatement {
+	stmt := &ExplainStatement{}
+
+	// Move past EXPLAIN
+	p.nextToken()
+
+	// Parse the inner statement
+	inner := p.parseStatement()
+	if inner == nil {
+		return nil
+	}
+	stmt.Statement = inner
 
 	return stmt
 }

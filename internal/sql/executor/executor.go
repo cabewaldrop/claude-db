@@ -159,6 +159,8 @@ func (e *Executor) Execute(stmt parser.Statement) (*Result, error) {
 		return e.executeUpdate(s)
 	case *parser.DeleteStatement:
 		return e.executeDelete(s)
+	case *parser.ExplainStatement:
+		return e.Explain(s.Statement)
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}

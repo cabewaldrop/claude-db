@@ -190,6 +190,19 @@ func (s *DropTableStatement) String() string {
 	return fmt.Sprintf("DROP TABLE %s", s.Table)
 }
 
+// ExplainStatement represents an EXPLAIN query.
+//
+// Example: EXPLAIN SELECT * FROM users WHERE id = 5
+type ExplainStatement struct {
+	Statement Statement // The statement to explain (SELECT, UPDATE, DELETE)
+}
+
+func (s *ExplainStatement) node()      {}
+func (s *ExplainStatement) statement() {}
+func (s *ExplainStatement) String() string {
+	return fmt.Sprintf("EXPLAIN %s", s.Statement)
+}
+
 // ============================================================================
 // Expressions
 // ============================================================================
