@@ -276,7 +276,10 @@ func (t *Table) Insert(values []Value) (uint64, error) {
 	t.nextRowID++
 
 	// Serialize row
-	rowData := t.serializeRow(rowID, values)
+	rowData, err := t.serializeRow(rowID, values)
+	if err != nil {
+		return 0, fmt.Errorf("failed to serialize row: %w", err)
+	}
 
 	// Store row data
 	pageID, offset, err := t.storeRowData(rowData)
@@ -287,7 +290,10 @@ func (t *Table) Insert(values []Value) (uint64, error) {
 	// Create key for B-tree (use primary key value or row ID)
 	var keyBytes []byte
 	if t.Schema.PrimaryKey >= 0 {
-		keyBytes = t.valueToBytes(values[t.Schema.PrimaryKey])
+		keyBytes, err = t.valueToBytes(values[t.Schema.PrimaryKey])
+		if err != nil {
+			return 0, fmt.Errorf("failed to serialize primary key: %w", err)
+		}
 	} else {
 		keyBytes = make([]byte, 8)
 		binary.LittleEndian.PutUint64(keyBytes, rowID)
@@ -369,41 +375,53 @@ func (t *Table) ScanWithFilter(filter func(Row) bool, limit int) ([]Row, error) 
 }
 
 // serializeRow converts a row to bytes.
-func (t *Table) serializeRow(rowID uint64, values []Value) []byte {
+func (t *Table) serializeRow(rowID uint64, values []Value) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
 
 	// Write row ID
-	binary.Write(buf, binary.LittleEndian, rowID)
-
-	// Write number of values
-	binary.Write(buf, binary.LittleEndian, uint16(len(values)))
-
-	// Write each value
-	for _, val := range values {
-		t.serializeValue(buf, val)
+	if err := binary.Write(buf, binary.LittleEndian, rowID); err != nil {
+		return nil, fmt.Errorf("writing row ID: %w", err)
 	}
 
-	return buf.Bytes()
+	// Write number of values
+	if err := binary.Write(buf, binary.LittleEndian, uint16(len(values))); err != nil {
+		return nil, fmt.Errorf("writing value count: %w", err)
+	}
+
+	// Write each value
+	for i, val := range values {
+		if err := t.serializeValue(buf, val); err != nil {
+			return nil, fmt.Errorf("serializing value %d: %w", i, err)
+		}
+	}
+
+	return buf.Bytes(), nil
 }
 
 // serializeValue writes a value to the buffer.
-func (t *Table) serializeValue(buf *bytes.Buffer, val Value) {
+func (t *Table) serializeValue(buf *bytes.Buffer, val Value) error {
 	// Write type and null flag
 	buf.WriteByte(byte(val.Type))
 	if val.IsNull {
 		buf.WriteByte(1)
-		return
+		return nil
 	}
 	buf.WriteByte(0)
 
 	// Write value based on type
 	switch val.Type {
 	case parser.TypeInteger:
-		binary.Write(buf, binary.LittleEndian, val.Integer)
+		if err := binary.Write(buf, binary.LittleEndian, val.Integer); err != nil {
+			return fmt.Errorf("writing integer value: %w", err)
+		}
 	case parser.TypeReal:
-		binary.Write(buf, binary.LittleEndian, val.Real)
+		if err := binary.Write(buf, binary.LittleEndian, val.Real); err != nil {
+			return fmt.Errorf("writing real value: %w", err)
+		}
 	case parser.TypeText:
-		binary.Write(buf, binary.LittleEndian, uint16(len(val.Text)))
+		if err := binary.Write(buf, binary.LittleEndian, uint16(len(val.Text))); err != nil {
+			return fmt.Errorf("writing text length: %w", err)
+		}
 		buf.WriteString(val.Text)
 	case parser.TypeBoolean:
 		if val.Boolean {
@@ -411,7 +429,10 @@ func (t *Table) serializeValue(buf *bytes.Buffer, val Value) {
 		} else {
 			buf.WriteByte(0)
 		}
+	default:
+		return fmt.Errorf("unsupported type for serialization: %v", val.Type)
 	}
+	return nil
 }
 
 // deserializeRow reads a row from bytes.
@@ -566,10 +587,12 @@ func (t *Table) readRowsFromPage(page *storage.Page) ([]Row, error) {
 }
 
 // valueToBytes converts a value to bytes for use as B-tree key.
-func (t *Table) valueToBytes(val Value) []byte {
+func (t *Table) valueToBytes(val Value) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
-	t.serializeValue(buf, val)
-	return buf.Bytes()
+	if err := t.serializeValue(buf, val); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // Update modifies rows matching the filter.
@@ -647,7 +670,10 @@ func (t *Table) GetRowByPrimaryKey(keyValue Value) (Row, bool, error) {
 	}
 
 	// Convert value to bytes for B-tree lookup
-	keyBytes := t.valueToBytes(keyValue)
+	keyBytes, err := t.valueToBytes(keyValue)
+	if err != nil {
+		return Row{}, false, fmt.Errorf("failed to serialize key: %w", err)
+	}
 
 	// Search the B-tree index
 	location, found, err := t.btree.Search(keyBytes)
