@@ -241,6 +241,21 @@ func (s *DropIndexStatement) statement() {}
 func (s *DropIndexStatement) String() string {
 	return fmt.Sprintf("DROP INDEX %s", s.IndexName)
 }
+
+// AnalyzeStatement represents an ANALYZE query.
+// ANALYZE refreshes table statistics for query planning.
+type AnalyzeStatement struct {
+	Table string // Empty string means analyze all tables
+}
+
+func (s *AnalyzeStatement) node()      {}
+func (s *AnalyzeStatement) statement() {}
+func (s *AnalyzeStatement) String() string {
+	if s.Table == "" {
+		return "ANALYZE"
+	}
+	return fmt.Sprintf("ANALYZE %s", s.Table)
+}
 // ============================================================================
 // Expressions
 // ============================================================================

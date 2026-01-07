@@ -70,6 +70,7 @@ const (
 	TokenIndex
 	TokenUnique
 	TokenOn
+	TokenAnalyze
 
 	// Data types
 	TokenInt
@@ -217,6 +218,7 @@ var keywords = map[string]TokenType{
 	"INDEX":   TokenIndex,
 	"UNIQUE":  TokenUnique,
 	"ON":      TokenOn,
+	"ANALYZE": TokenAnalyze,
 	"INT":     TokenInt,
 	"INTEGER": TokenInteger,
 	"TEXT":    TokenText,

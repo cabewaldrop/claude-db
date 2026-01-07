@@ -805,3 +805,47 @@ func TestMultipleIndexes(t *testing.T) {
 		t.Errorf("expected 3 indexes, got %d", len(indexes))
 	}
 }
+
+func TestAnalyzeCommand(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	// Create table and insert data
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	for i := 1; i <= 10; i++ {
+		executeSQL(t, exec, "INSERT INTO users (id, name) VALUES (1, 'User')")
+	}
+
+	// Run ANALYZE
+	result := executeSQL(t, exec, "ANALYZE users")
+	if !strings.Contains(result.Message, "Analyzed") {
+		t.Errorf("expected 'Analyzed' in message, got %q", result.Message)
+	}
+
+	// Check stats are available
+	tbl, ok := exec.GetTable("users")
+	if !ok {
+		t.Fatal("table users not found")
+	}
+	stats := tbl.Stats()
+	if stats.RowCount != 10 {
+		t.Errorf("expected RowCount 10 after ANALYZE, got %d", stats.RowCount)
+	}
+}
+
+func TestAnalyzeAllTables(t *testing.T) {
+	exec, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	// Create multiple tables
+	executeSQL(t, exec, "CREATE TABLE users (id INTEGER PRIMARY KEY)")
+	executeSQL(t, exec, "CREATE TABLE orders (id INTEGER PRIMARY KEY)")
+	executeSQL(t, exec, "INSERT INTO users (id) VALUES (1)")
+	executeSQL(t, exec, "INSERT INTO orders (id) VALUES (1)")
+
+	// Run ANALYZE without table name (analyze all)
+	result := executeSQL(t, exec, "ANALYZE")
+	if !strings.Contains(result.Message, "2 table") {
+		t.Errorf("expected message about 2 tables, got %q", result.Message)
+	}
+}

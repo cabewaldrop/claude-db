@@ -113,6 +113,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseDropStatement()
 	case lexer.TokenExplain:
 		return p.parseExplainStatement()
+	case lexer.TokenAnalyze:
+		return p.parseAnalyzeStatement()
 	default:
 		p.errors = append(p.errors, fmt.Sprintf("unexpected token: %s", p.curToken.Literal))
 		return nil
@@ -602,6 +604,24 @@ func (p *Parser) parseDropIndexStatement() *DropIndexStatement {
 		return nil
 	}
 	stmt.IndexName = p.curToken.Literal
+
+	return stmt
+}
+
+// parseAnalyzeStatement parses: ANALYZE [tablename]
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// ANALYZE refreshes table statistics used by the query planner.
+// Without a table name, it analyzes all tables.
+func (p *Parser) parseAnalyzeStatement() Statement {
+	stmt := &AnalyzeStatement{}
+
+	// Optional table name
+	if p.peekTokenIs(lexer.TokenIdent) {
+		p.nextToken()
+		stmt.Table = p.curToken.Literal
+	}
 
 	return stmt
 }
