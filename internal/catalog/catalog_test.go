@@ -244,6 +244,96 @@ func TestCatalogLoadTable(t *testing.T) {
 	}
 }
 
+func TestCatalogDataPageIDsPersistence(t *testing.T) {
+	testFile := "test_catalog_datapages.db"
+	defer os.Remove(testFile)
+
+	// Create database, add table with data to populate dataPageIDs
+	func() {
+		pager, err := storage.NewPager(testFile)
+		if err != nil {
+			t.Fatalf("Failed to create pager: %v", err)
+		}
+		defer pager.Close()
+
+		cat, err := NewCatalog(pager)
+		if err != nil {
+			t.Fatalf("Failed to create catalog: %v", err)
+		}
+
+		schema := table.NewSchema([]parser.ColumnDefinition{
+			{Name: "id", Type: parser.TypeInteger, PrimaryKey: true},
+			{Name: "data", Type: parser.TypeText},
+		})
+
+		tbl, err := table.NewTable("items", schema, pager)
+		if err != nil {
+			t.Fatalf("Failed to create table: %v", err)
+		}
+
+		// Insert rows to create data pages
+		for i := 0; i < 10; i++ {
+			_, err := tbl.Insert([]table.Value{
+				{Type: parser.TypeInteger, Integer: int64(i + 1)},
+				{Type: parser.TypeText, Text: "test data"},
+			})
+			if err != nil {
+				t.Fatalf("Failed to insert row: %v", err)
+			}
+		}
+
+		// Verify dataPageIDs is non-empty before save
+		dataPageIDs := tbl.GetDataPageIDs()
+		if len(dataPageIDs) == 0 {
+			t.Fatal("Expected dataPageIDs to be non-empty after inserts")
+		}
+
+		// Add to catalog
+		if err := cat.AddTable("items", tbl); err != nil {
+			t.Fatalf("Failed to add table: %v", err)
+		}
+
+		cat.Flush()
+	}()
+
+	// Reopen and verify dataPageIDs is preserved
+	pager, err := storage.NewPager(testFile)
+	if err != nil {
+		t.Fatalf("Failed to reopen pager: %v", err)
+	}
+	defer pager.Close()
+
+	cat, err := NewCatalog(pager)
+	if err != nil {
+		t.Fatalf("Failed to reload catalog: %v", err)
+	}
+
+	// Check TableInfo has dataPageIDs
+	info, ok := cat.GetTableInfo("items")
+	if !ok {
+		t.Fatal("Table 'items' not found after reload")
+	}
+
+	if len(info.DataPageIDs) == 0 {
+		t.Error("Expected DataPageIDs to be non-empty in TableInfo after reload")
+	}
+
+	// Load table and verify Scan works (uses dataPageIDs)
+	tbl, err := cat.LoadTable("items", pager)
+	if err != nil {
+		t.Fatalf("Failed to load table: %v", err)
+	}
+
+	rows, err := tbl.Scan()
+	if err != nil {
+		t.Fatalf("Failed to scan table: %v", err)
+	}
+
+	if len(rows) != 10 {
+		t.Errorf("Expected 10 rows after reload, got %d", len(rows))
+	}
+}
+
 func TestCatalogNextRowIDPersistence(t *testing.T) {
 	testFile := "test_catalog_rowid.db"
 	defer os.Remove(testFile)

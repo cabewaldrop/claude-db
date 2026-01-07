@@ -38,11 +38,12 @@ const (
 
 // TableInfo stores metadata about a table for persistence.
 type TableInfo struct {
-	Name       string
-	RootPage   uint32
-	NextRowID  uint64
-	Columns    []ColumnInfo
-	PrimaryKey int
+	Name        string
+	RootPage    uint32
+	NextRowID   uint64
+	DataPageIDs []uint32
+	Columns     []ColumnInfo
+	PrimaryKey  int
 }
 
 // ColumnInfo stores column metadata.
@@ -188,6 +189,18 @@ func (c *Catalog) readTableInfo(buf *bytes.Reader) (*TableInfo, error) {
 		return nil, err
 	}
 
+	// Read data page IDs
+	var numDataPages uint16
+	if err := binary.Read(buf, binary.LittleEndian, &numDataPages); err != nil {
+		return nil, err
+	}
+	info.DataPageIDs = make([]uint32, numDataPages)
+	for i := uint16(0); i < numDataPages; i++ {
+		if err := binary.Read(buf, binary.LittleEndian, &info.DataPageIDs[i]); err != nil {
+			return nil, err
+		}
+	}
+
 	// Read primary key index
 	var pkIdx int32
 	if err := binary.Read(buf, binary.LittleEndian, &pkIdx); err != nil {
@@ -222,6 +235,12 @@ func (c *Catalog) writeTableInfo(buf *bytes.Buffer, info *TableInfo) error {
 	// Write root page and next row ID
 	binary.Write(buf, binary.LittleEndian, info.RootPage)
 	binary.Write(buf, binary.LittleEndian, info.NextRowID)
+
+	// Write data page IDs
+	binary.Write(buf, binary.LittleEndian, uint16(len(info.DataPageIDs)))
+	for _, pageID := range info.DataPageIDs {
+		binary.Write(buf, binary.LittleEndian, pageID)
+	}
 
 	// Write primary key index
 	binary.Write(buf, binary.LittleEndian, int32(info.PrimaryKey))
@@ -295,11 +314,12 @@ func (c *Catalog) writeColumnInfo(buf *bytes.Buffer, col ColumnInfo) error {
 // AddTable registers a new table in the catalog.
 func (c *Catalog) AddTable(name string, tbl *table.Table) error {
 	info := &TableInfo{
-		Name:       name,
-		RootPage:   tbl.GetRootPage(),
-		NextRowID:  tbl.GetNextRowID(),
-		PrimaryKey: tbl.Schema.PrimaryKey,
-		Columns:    make([]ColumnInfo, len(tbl.Schema.Columns)),
+		Name:        name,
+		RootPage:    tbl.GetRootPage(),
+		NextRowID:   tbl.GetNextRowID(),
+		DataPageIDs: tbl.GetDataPageIDs(),
+		PrimaryKey:  tbl.Schema.PrimaryKey,
+		Columns:     make([]ColumnInfo, len(tbl.Schema.Columns)),
 	}
 
 	for i, col := range tbl.Schema.Columns {
@@ -355,7 +375,7 @@ func (c *Catalog) LoadTable(name string, pager *storage.Pager) (*table.Table, er
 	}
 
 	schema := table.NewSchema(columns)
-	return table.LoadTable(name, schema, pager, info.RootPage, info.NextRowID), nil
+	return table.LoadTable(name, schema, pager, info.RootPage, info.NextRowID, info.DataPageIDs), nil
 }
 
 // Flush ensures all catalog changes are written to disk.
