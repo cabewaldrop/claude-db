@@ -462,3 +462,239 @@ func TestBTreeLeafSiblingPointers(t *testing.T) {
 		t.Errorf("Expected at least 2 leaf nodes after %d inserts, got %d", numKeys, leafCount)
 	}
 }
+
+func TestBTreeIterator(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys
+	numKeys := 100
+	for i := 0; i < numKeys; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test full iteration
+	iter := btree.NewIterator()
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		expectedKey := fmt.Sprintf("key_%04d", count)
+		if string(iter.Key()) != expectedKey {
+			t.Errorf("Key %d: expected %s, got %s", count, expectedKey, iter.Key())
+		}
+		if iter.Value() != uint64(count) {
+			t.Errorf("Value %d: expected %d, got %d", count, count, iter.Value())
+		}
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	if count != numKeys {
+		t.Errorf("Expected %d keys, iterated %d", numKeys, count)
+	}
+}
+
+func TestBTreeIteratorRange(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys 0-99
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test range iteration: keys 25-74 (inclusive)
+	startKey := []byte("key_0025")
+	endKey := []byte("key_0074")
+	iter := btree.NewRangeIterator(startKey, endKey)
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		expectedIdx := 25 + count
+		expectedKey := fmt.Sprintf("key_%04d", expectedIdx)
+		if string(iter.Key()) != expectedKey {
+			t.Errorf("Key %d: expected %s, got %s", count, expectedKey, iter.Key())
+		}
+		if iter.Value() != uint64(expectedIdx) {
+			t.Errorf("Value %d: expected %d, got %d", count, expectedIdx, iter.Value())
+		}
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	expectedCount := 50 // keys 25-74 inclusive
+	if count != expectedCount {
+		t.Errorf("Expected %d keys, iterated %d", expectedCount, count)
+	}
+}
+
+func TestBTreeIteratorRangeExclusive(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test exclusive end bound
+	startKey := []byte("key_0025")
+	endKey := []byte("key_0030")
+	opts := RangeScanOptions{
+		StartInclusive: true,
+		EndInclusive:   false,
+	}
+	iter := btree.NewRangeIteratorWithOptions(startKey, endKey, opts)
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	expectedCount := 5 // keys 25-29 (30 excluded)
+	if count != expectedCount {
+		t.Errorf("Expected %d keys (exclusive end), iterated %d", expectedCount, count)
+	}
+}
+
+func TestBTreeIteratorCollect(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys
+	numKeys := 50
+	for i := 0; i < numKeys; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test Collect method
+	iter := btree.NewIterator()
+	keys, values, err := iter.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	if len(keys) != numKeys {
+		t.Errorf("Expected %d keys, got %d", numKeys, len(keys))
+	}
+
+	if len(values) != numKeys {
+		t.Errorf("Expected %d values, got %d", numKeys, len(values))
+	}
+
+	// Verify keys are copies
+	for i, key := range keys {
+		expected := fmt.Sprintf("key_%04d", i)
+		if string(key) != expected {
+			t.Errorf("Key %d: expected %s, got %s", i, expected, key)
+		}
+	}
+}
+
+func TestBTreeIteratorEmpty(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Iterate over empty tree
+	iter := btree.NewIterator()
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error on empty tree: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("Expected 0 keys in empty tree, got %d", count)
+	}
+}
+
+func TestBTreeIteratorEarlyTermination(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert many keys
+	for i := 0; i < 200; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Only read first 5 keys then close
+	iter := btree.NewIterator()
+	count := 0
+	for iter.Next() {
+		count++
+		if count >= 5 {
+			break
+		}
+	}
+	iter.Close()
+
+	// Verify we can stop early without error
+	if count != 5 {
+		t.Errorf("Expected to read 5 keys, got %d", count)
+	}
+}
+
+func TestBTreeIteratorRangeOpenEnd(t *testing.T) {
+	btree, _, cleanup := setupTestBTree(t)
+	defer cleanup()
+
+	// Insert keys
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key_%04d", i))
+		if err := btree.Insert(key, uint64(i)); err != nil {
+			t.Fatalf("Insert %d failed: %v", i, err)
+		}
+	}
+
+	// Test open-ended range (no end key)
+	startKey := []byte("key_0090")
+	iter := btree.NewRangeIterator(startKey, nil)
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+	}
+
+	if err := iter.Err(); err != nil {
+		t.Errorf("Iterator error: %v", err)
+	}
+
+	expectedCount := 10 // keys 90-99
+	if count != expectedCount {
+		t.Errorf("Expected %d keys, got %d", expectedCount, count)
+	}
+}

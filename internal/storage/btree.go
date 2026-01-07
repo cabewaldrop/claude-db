@@ -65,6 +65,56 @@ type BTree struct {
 	rootPage uint32
 }
 
+// BTreeIterator provides streaming iteration over B-tree key-value pairs.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// Iterators are a common pattern for handling large result sets efficiently:
+// - Lazy evaluation: only load data as needed
+// - Memory efficient: one key-value pair at a time
+// - Early termination: stop when you've found what you need
+//
+// Usage:
+//
+//	iter := btree.NewRangeIterator(startKey, endKey)
+//	defer iter.Close()
+//	for iter.Next() {
+//	    key := iter.Key()
+//	    value := iter.Value()
+//	    // process...
+//	}
+//	if err := iter.Err(); err != nil {
+//	    return err
+//	}
+type BTreeIterator struct {
+	bt         *BTree
+	startKey   []byte
+	endKey     []byte
+	inclusive  bool // true if endKey is inclusive (<=)
+	currentKey []byte
+	currentVal uint64
+	leafPageID uint32
+	keyIdx     int
+	node       *BTreeNode
+	started    bool
+	done       bool
+	err        error
+}
+
+// RangeScanOptions configures range scan behavior.
+type RangeScanOptions struct {
+	StartInclusive bool // Include startKey in results (default: true)
+	EndInclusive   bool // Include endKey in results (default: true)
+}
+
+// DefaultRangeScanOptions returns the default options (both bounds inclusive).
+func DefaultRangeScanOptions() RangeScanOptions {
+	return RangeScanOptions{
+		StartInclusive: true,
+		EndInclusive:   true,
+	}
+}
+
 // NewBTree creates a new B-tree with an empty root.
 func NewBTree(pager *Pager) (*BTree, error) {
 	rootPage, err := pager.AllocatePage(PageTypeBTreeLeaf)
@@ -562,6 +612,201 @@ func (bt *BTree) findLeftmostLeaf(pageID uint32) (uint32, error) {
 
 	// Go to leftmost child
 	return bt.findLeftmostLeaf(node.children[0])
+}
+
+// NewRangeIterator creates an iterator for a key range [startKey, endKey].
+// Pass nil for startKey to start from the beginning.
+// Pass nil for endKey to iterate to the end.
+func (bt *BTree) NewRangeIterator(startKey, endKey []byte) *BTreeIterator {
+	return bt.NewRangeIteratorWithOptions(startKey, endKey, DefaultRangeScanOptions())
+}
+
+// NewRangeIteratorWithOptions creates an iterator with custom options.
+func (bt *BTree) NewRangeIteratorWithOptions(startKey, endKey []byte, opts RangeScanOptions) *BTreeIterator {
+	return &BTreeIterator{
+		bt:        bt,
+		startKey:  startKey,
+		endKey:    endKey,
+		inclusive: opts.EndInclusive,
+		started:   false,
+		done:      false,
+	}
+}
+
+// NewIterator creates an iterator over all keys in the B-tree.
+func (bt *BTree) NewIterator() *BTreeIterator {
+	return bt.NewRangeIterator(nil, nil)
+}
+
+// Next advances the iterator to the next key-value pair.
+// Returns true if there is a next pair, false when iteration is complete.
+// After Next returns false, call Err() to check for any errors.
+func (it *BTreeIterator) Next() bool {
+	if it.done || it.err != nil {
+		return false
+	}
+
+	// First call - initialize position
+	if !it.started {
+		it.started = true
+		if err := it.seekStart(); err != nil {
+			it.err = err
+			it.done = true
+			return false
+		}
+		// seekStart positions us before the first key, fall through to advance
+	}
+
+	// Advance to next key
+	return it.advance()
+}
+
+// seekStart positions the iterator at the starting point.
+func (it *BTreeIterator) seekStart() error {
+	var leafPageID uint32
+	var err error
+
+	if it.startKey == nil {
+		// Start from beginning
+		leafPageID, err = it.bt.FirstLeaf()
+	} else {
+		// Find leaf containing startKey
+		leafPageID, err = it.bt.findLeaf(it.bt.rootPage, it.startKey)
+	}
+	if err != nil {
+		return err
+	}
+
+	it.leafPageID = leafPageID
+
+	// Load the leaf node
+	page, err := it.bt.pager.GetPage(leafPageID)
+	if err != nil {
+		return err
+	}
+
+	node, err := deserializeNode(page)
+	if err != nil {
+		return err
+	}
+
+	it.node = node
+
+	// Find starting index
+	if it.startKey == nil {
+		it.keyIdx = -1 // Will be incremented to 0 in advance()
+	} else {
+		idx := it.bt.findKeyIndex(node, it.startKey)
+		it.keyIdx = idx - 1 // Will be incremented in advance()
+	}
+
+	return nil
+}
+
+// advance moves to the next key-value pair.
+func (it *BTreeIterator) advance() bool {
+	it.keyIdx++
+
+	for {
+		// Check if we have more keys in current node
+		if it.keyIdx < int(it.node.numKeys) {
+			key := it.node.keys[it.keyIdx]
+
+			// Check end bound
+			if it.endKey != nil {
+				cmp := bytes.Compare(key, it.endKey)
+				if cmp > 0 || (cmp == 0 && !it.inclusive) {
+					it.done = true
+					return false
+				}
+			}
+
+			it.currentKey = key
+			it.currentVal = it.node.values[it.keyIdx]
+			return true
+		}
+
+		// Move to next leaf
+		if it.node.nextLeaf == 0 {
+			it.done = true
+			return false
+		}
+
+		page, err := it.bt.pager.GetPage(it.node.nextLeaf)
+		if err != nil {
+			it.err = err
+			it.done = true
+			return false
+		}
+
+		node, err := deserializeNode(page)
+		if err != nil {
+			it.err = err
+			it.done = true
+			return false
+		}
+
+		it.leafPageID = it.node.nextLeaf
+		it.node = node
+		it.keyIdx = 0
+
+		// Check first key of new node
+		if int(it.node.numKeys) > 0 {
+			key := it.node.keys[0]
+			if it.endKey != nil {
+				cmp := bytes.Compare(key, it.endKey)
+				if cmp > 0 || (cmp == 0 && !it.inclusive) {
+					it.done = true
+					return false
+				}
+			}
+			it.currentKey = key
+			it.currentVal = it.node.values[0]
+			return true
+		}
+	}
+}
+
+// Key returns the current key. Only valid after Next() returns true.
+func (it *BTreeIterator) Key() []byte {
+	return it.currentKey
+}
+
+// Value returns the current value. Only valid after Next() returns true.
+func (it *BTreeIterator) Value() uint64 {
+	return it.currentVal
+}
+
+// Err returns any error that occurred during iteration.
+// Should be called after Next() returns false to check for errors.
+func (it *BTreeIterator) Err() error {
+	return it.err
+}
+
+// Close releases any resources held by the iterator.
+// It's good practice to call Close when done, though not strictly required
+// for this in-memory implementation.
+func (it *BTreeIterator) Close() error {
+	it.done = true
+	it.node = nil
+	return nil
+}
+
+// Collect gathers all remaining key-value pairs into slices.
+// This is a convenience method; prefer iteration for large result sets.
+func (it *BTreeIterator) Collect() ([][]byte, []uint64, error) {
+	var keys [][]byte
+	var values []uint64
+
+	for it.Next() {
+		// Make copies of keys since they reference internal storage
+		keyCopy := make([]byte, len(it.currentKey))
+		copy(keyCopy, it.currentKey)
+		keys = append(keys, keyCopy)
+		values = append(values, it.currentVal)
+	}
+
+	return keys, values, it.Err()
 }
 
 // serializeNode writes a BTreeNode to a page.
