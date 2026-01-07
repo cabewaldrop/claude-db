@@ -22,6 +22,7 @@ import (
 
 	"github.com/cabewaldrop/claude-db/internal/catalog"
 	"github.com/cabewaldrop/claude-db/internal/sql/parser"
+	"github.com/cabewaldrop/claude-db/internal/sql/planner"
 	"github.com/cabewaldrop/claude-db/internal/storage"
 	"github.com/cabewaldrop/claude-db/internal/table"
 )
@@ -102,13 +103,15 @@ type Executor struct {
 	pager   *storage.Pager
 	catalog *catalog.Catalog
 	tables  map[string]*table.Table
+	planner *planner.Planner
 }
 
 // New creates a new Executor.
 func New(pager *storage.Pager) *Executor {
 	return &Executor{
-		pager:  pager,
-		tables: make(map[string]*table.Table),
+		pager:   pager,
+		tables:  make(map[string]*table.Table),
+		planner: planner.New(),
 	}
 }
 
@@ -118,6 +121,7 @@ func NewWithCatalog(pager *storage.Pager, cat *catalog.Catalog) (*Executor, erro
 		pager:   pager,
 		catalog: cat,
 		tables:  make(map[string]*table.Table),
+		planner: planner.New(),
 	}
 
 	// Load existing tables from catalog
@@ -158,6 +162,90 @@ func (e *Executor) Execute(stmt parser.Statement) (*Result, error) {
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}
+}
+
+// Explain returns a query plan without executing the statement.
+//
+// EDUCATIONAL NOTE:
+// -----------------
+// EXPLAIN is a standard SQL command that shows how the database will
+// execute a query without actually running it. This is invaluable for
+// understanding and optimizing query performance.
+func (e *Executor) Explain(stmt parser.Statement) (*Result, error) {
+	switch s := stmt.(type) {
+	case *parser.SelectStatement:
+		return e.explainSelect(s)
+	default:
+		return nil, fmt.Errorf("EXPLAIN not supported for statement type: %T", stmt)
+	}
+}
+
+// explainSelect returns the query plan for a SELECT statement.
+func (e *Executor) explainSelect(stmt *parser.SelectStatement) (*Result, error) {
+	tableName := strings.ToLower(stmt.From)
+
+	tbl, exists := e.tables[tableName]
+	if !exists {
+		return nil, fmt.Errorf("table %s does not exist", tableName)
+	}
+
+	// Generate query plan
+	plan := e.planner.PlanSelect(stmt, tbl.Schema)
+
+	// Format the plan as a result
+	var rows [][]table.Value
+	rows = append(rows, []table.Value{
+		{Type: parser.TypeText, Text: "Query Plan"},
+		{Type: parser.TypeText, Text: plan.String()},
+	})
+	rows = append(rows, []table.Value{
+		{Type: parser.TypeText, Text: "Access Method"},
+		{Type: parser.TypeText, Text: plan.AccessMethod.String()},
+	})
+	rows = append(rows, []table.Value{
+		{Type: parser.TypeText, Text: "Estimated Cost"},
+		{Type: parser.TypeText, Text: fmt.Sprintf("%.2f", plan.EstimatedCost)},
+	})
+
+	if len(plan.Predicates) > 0 {
+		rows = append(rows, []table.Value{
+			{Type: parser.TypeText, Text: "Predicates"},
+			{Type: parser.TypeText, Text: fmt.Sprintf("%d condition(s)", len(plan.Predicates))},
+		})
+		for i, pred := range plan.Predicates {
+			indexNote := ""
+			if pred.IsOnPK {
+				indexNote = " (indexed)"
+			}
+			rows = append(rows, []table.Value{
+				{Type: parser.TypeText, Text: fmt.Sprintf("  [%d]", i+1)},
+				{Type: parser.TypeText, Text: fmt.Sprintf("%s %s %v%s", pred.Column, pred.Operator, pred.Value, indexNote)},
+			})
+		}
+	}
+
+	return &Result{
+		Columns: []string{"Property", "Value"},
+		Rows:    rows,
+	}, nil
+}
+
+// AnalyzeWhere analyzes a WHERE clause and returns analysis information.
+// This is useful for understanding how the planner interprets WHERE clauses.
+func (e *Executor) AnalyzeWhere(where parser.Expression, schema *table.Schema) *planner.WhereAnalysis {
+	return e.planner.AnalyzeWhere(where, schema)
+}
+
+// GetQueryPlan generates a query plan for a SELECT statement.
+func (e *Executor) GetQueryPlan(stmt *parser.SelectStatement) (*planner.QueryPlan, error) {
+	tableName := strings.ToLower(stmt.From)
+
+	tbl, exists := e.tables[tableName]
+	if !exists {
+		return nil, fmt.Errorf("table %s does not exist", tableName)
+	}
+
+	return e.planner.PlanSelect(stmt, tbl.Schema), nil
 }
 
 // executeCreateTable handles CREATE TABLE statements.
