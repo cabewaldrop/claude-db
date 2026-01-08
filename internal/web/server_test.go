@@ -214,6 +214,75 @@ func TestStaticStyleCSS(t *testing.T) {
 	if contentType != "text/css; charset=utf-8" {
 		t.Errorf("Expected CSS content type, got %q", contentType)
 	}
+
+	// Verify CSS contains required components
+	body, _ := io.ReadAll(resp.Body)
+	css := string(body)
+
+	// Check for navbar styling
+	if !strings.Contains(css, ".navbar") {
+		t.Error("Expected .navbar class in CSS")
+	}
+
+	// Check for button styling
+	if !strings.Contains(css, ".btn-primary") {
+		t.Error("Expected .btn-primary class in CSS")
+	}
+
+	// Check for table styling
+	if !strings.Contains(css, "border-collapse") {
+		t.Error("Expected border-collapse for tables in CSS")
+	}
+}
+
+func TestCSSResponsiveBreakpoints(t *testing.T) {
+	srv := NewServer(0, nil)
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/static/style.css")
+	if err != nil {
+		t.Fatalf("Failed to GET /static/style.css: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	css := string(body)
+
+	// Check for media queries
+	if !strings.Contains(css, "@media") {
+		t.Error("Expected @media query in CSS")
+	}
+
+	// Check for 768px breakpoint
+	if !strings.Contains(css, "768px") {
+		t.Error("Expected 768px breakpoint in CSS")
+	}
+}
+
+func TestCSSBadges(t *testing.T) {
+	srv := NewServer(0, nil)
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/static/style.css")
+	if err != nil {
+		t.Fatalf("Failed to GET /static/style.css: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	css := string(body)
+
+	// Check for badge classes
+	if !strings.Contains(css, ".badge") {
+		t.Error("Expected .badge class in CSS")
+	}
+	if !strings.Contains(css, ".badge.pk") {
+		t.Error("Expected .badge.pk class for primary key in CSS")
+	}
 }
 
 func TestStaticFileNotFound(t *testing.T) {
