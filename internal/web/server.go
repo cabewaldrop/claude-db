@@ -68,12 +68,17 @@ func NewServer(port int, exec *executor.Executor) *Server {
 
 // routes sets up all HTTP routes for the server.
 func (s *Server) routes() {
+	// Web UI routes
 	s.router.Get("/", s.handleIndex)
 	s.router.Get("/health", s.handleHealth)
-	// Additional routes will be added by other tasks:
-	// - Static file serving
-	// - Query execution endpoints
-	// - Table browsing endpoints
+
+	// JSON API routes
+	s.router.Route("/api", func(r chi.Router) {
+		r.Get("/tables", s.handleAPITables)
+		r.Get("/tables/{name}", s.handleAPITableSchema)
+		r.Get("/tables/{name}/rows", s.handleAPITableRows)
+		r.Post("/query", s.handleAPIQuery)
+	})
 }
 
 // Router returns the chi router for testing purposes.
