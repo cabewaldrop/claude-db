@@ -1,0 +1,28 @@
+{{/* templates/base.html - Base template that all pages extend */}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}claudedb{{end}}</title>
+    <script src="/static/htmx.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="brand">claudedb</a>
+        <ul>
+            <li><a href="/query">Query</a></li>
+            <li><a href="/tables">Tables</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        {{block "content" .}}{{end}}
+    </main>
+
+    <footer>
+        <p>claudedb web interface</p>
+    </footer>
+</body>
+</html>
