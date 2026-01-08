@@ -1,0 +1,32 @@
+{{/* templates/partials/edit_row.html */}}
+<div class="edit-modal-content">
+    <h3>Edit Row</h3>
+
+    <form hx-put="/tables/{{.Table}}/{{.PrimaryKey}}"
+          hx-target="#result"
+          hx-swap="outerHTML">
+
+        {{range .Columns}}
+        <div class="form-group">
+            <label for="edit-{{.Name}}">{{.Name}} ({{.Type}})</label>
+
+            {{if .IsPrimaryKey}}
+            <input type="text" id="edit-{{.Name}}" value="{{.Value}}" disabled>
+            <input type="hidden" name="{{.Name}}" value="{{.Value}}">
+            {{else if eq .Type "TEXT"}}
+            <textarea id="edit-{{.Name}}" name="{{.Name}}"
+                      {{if .NotNull}}required{{end}}>{{.Value}}</textarea>
+            {{else}}
+            <input type="text" id="edit-{{.Name}}" name="{{.Name}}"
+                   value="{{.Value}}"
+                   {{if .NotNull}}required{{end}}>
+            {{end}}
+        </div>
+        {{end}}
+
+        <div class="form-actions">
+            <button type="submit" class="btn-primary">Save</button>
+            <button type="button" onclick="closeModal()" class="btn">Cancel</button>
+        </div>
+    </form>
+</div>
