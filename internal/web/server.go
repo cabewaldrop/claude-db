@@ -71,10 +71,11 @@ func (s *Server) routes() {
 	s.router.Get("/", s.handleIndex)
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/query", s.handleQueryPage)
+	s.router.Get("/tables/{name}", s.handleTableSchema)
 	// Additional routes will be added by other tasks:
 	// - Static file serving
 	// - Query execution endpoints (POST /query)
-	// - Table browsing endpoints
+	// - Table list endpoint (GET /tables)
 }
 
 // Router returns the chi router for testing purposes.

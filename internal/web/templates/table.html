@@ -1,0 +1,77 @@
+{{/* templates/table.html - Table schema detail page */}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Table.Name}} - claudedb</title>
+    <script src="/static/htmx.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="brand">claudedb</a>
+        <ul>
+            <li><a href="/query">Query</a></li>
+            <li><a href="/tables">Tables</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        <div class="table-detail">
+            <nav class="breadcrumb">
+                <a href="/tables">Tables</a> / <span>{{.Table.Name}}</span>
+            </nav>
+
+            <h1>{{.Table.Name}}</h1>
+
+            <section class="schema-section">
+                <h2>Schema</h2>
+                <table class="schema-table">
+                    <thead>
+                        <tr>
+                            <th>Column</th>
+                            <th>Type</th>
+                            <th>Constraints</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Table.Columns}}
+                        <tr>
+                            <td>{{.Name}}</td>
+                            <td>{{.Type}}</td>
+                            <td>
+                                {{if .IsPrimaryKey}}<span class="badge pk">PK</span>{{end}}
+                                {{if .NotNull}}<span class="badge nn">NOT NULL</span>{{end}}
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </section>
+
+            {{if .Table.Indexes}}
+            <section class="indexes-section">
+                <h2>Indexes</h2>
+                <ul>
+                    {{range .Table.Indexes}}
+                    <li>{{.Name}} on ({{.Columns}})</li>
+                    {{end}}
+                </ul>
+            </section>
+            {{end}}
+
+            <section class="actions">
+                <a href="/query?q=SELECT+*+FROM+{{.Table.Name}}+LIMIT+100" class="btn">View Data</a>
+                <button hx-delete="/tables/{{.Table.Name}}"
+                        hx-confirm="Drop table {{.Table.Name}}? This cannot be undone."
+                        class="btn-danger">Drop Table</button>
+            </section>
+        </div>
+    </main>
+
+    <footer>
+        <p>claudedb web interface</p>
+    </footer>
+</body>
+</html>
