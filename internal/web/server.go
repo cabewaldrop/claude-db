@@ -68,11 +68,16 @@ func NewServer(port int, exec *executor.Executor) *Server {
 
 // routes sets up all HTTP routes for the server.
 func (s *Server) routes() {
+	// Apply executor middleware to inject database access into request context
+	if s.executor != nil {
+		s.router.Use(WithExecutor(s.executor))
+	}
+
 	s.router.Get("/", s.handleIndex)
 	s.router.Get("/health", s.handleHealth)
+	s.router.Post("/query", s.handleQueryExecute)
 	// Additional routes will be added by other tasks:
 	// - Static file serving
-	// - Query execution endpoints
 	// - Table browsing endpoints
 }
 
