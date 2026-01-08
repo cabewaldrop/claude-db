@@ -265,3 +265,123 @@ func (s *Server) handleDeleteRow(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("<!-- Row deleted -->"))
 }
+
+// handleInsertRow handles the insert form and POST submission.
+//
+// GET /tables/{name}/insert - Shows the insert form
+// POST /tables/{name}/insert - Inserts the row
+func (s *Server) handleInsertRow(w http.ResponseWriter, r *http.Request) {
+	tableName := chi.URLParam(r, "name")
+
+	if s.executor == nil {
+		http.Error(w, "Database not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get the table to verify it exists and get schema
+	tbl, exists := s.executor.GetTable(tableName)
+	if !exists {
+		http.Error(w, fmt.Sprintf("Table %s does not exist", tableName), http.StatusNotFound)
+		return
+	}
+
+	// Build column info from schema
+	columns := make([]ColumnInfo, len(tbl.Schema.Columns))
+	for i, col := range tbl.Schema.Columns {
+		columns[i] = ColumnInfo{
+			Name:       col.Name,
+			Type:       col.Type.String(),
+			PrimaryKey: col.PrimaryKey,
+			NotNull:    col.NotNull || col.PrimaryKey,
+		}
+	}
+
+	if r.Method == http.MethodGet {
+		// Render the insert form
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := RenderTemplate(w, "table_insert.html", map[string]interface{}{
+			"Table":   tableName,
+			"Columns": columns,
+		}); err != nil {
+			http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// POST: Insert the row
+	if err := r.ParseForm(); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		RenderTemplate(w, "error.html", map[string]string{
+			"Error": "Failed to parse form data",
+		})
+		return
+	}
+
+	var colNames []string
+	var values []string
+
+	for _, col := range tbl.Schema.Columns {
+		value := r.FormValue(col.Name)
+
+		// Skip empty non-required fields
+		if value == "" && !col.NotNull && !col.PrimaryKey {
+			continue
+		}
+
+		colNames = append(colNames, col.Name)
+
+		// Quote strings, leave numbers unquoted
+		if col.Type == parser.TypeText {
+			values = append(values, fmt.Sprintf("'%s'", escapeSQL(value)))
+		} else if value == "" {
+			values = append(values, "NULL")
+		} else {
+			values = append(values, value)
+		}
+	}
+
+	sql := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		tableName,
+		strings.Join(colNames, ", "),
+		strings.Join(values, ", "))
+
+	// Parse and execute the SQL
+	lex := lexer.New(sql)
+	p := parser.New(lex)
+	stmt, err := p.Parse()
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		RenderTemplate(w, "error.html", map[string]string{
+			"Error": fmt.Sprintf("Parse error: %v", err),
+			"Query": sql,
+		})
+		return
+	}
+
+	_, err = s.executor.Execute(stmt)
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		RenderTemplate(w, "error.html", map[string]string{
+			"Error": err.Error(),
+			"Query": sql,
+		})
+		return
+	}
+
+	// Check if user wants to insert another
+	if r.FormValue("insert_another") == "1" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		RenderTemplate(w, "success.html", map[string]string{
+			"Message": "Row inserted successfully. Add another?",
+		})
+		return
+	}
+
+	// Redirect to table view
+	http.Redirect(w, r, "/tables/"+tableName, http.StatusSeeOther)
+}
+
+// escapeSQL escapes single quotes in SQL strings to prevent injection.
+func escapeSQL(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}

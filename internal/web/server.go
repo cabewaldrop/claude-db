@@ -92,6 +92,8 @@ func (s *Server) routes() {
 
 	// Table data manipulation endpoints
 	s.router.Delete("/tables/{name}/{pk}", s.handleDeleteRow)
+	s.router.Get("/tables/{name}/insert", s.handleInsertRow)
+	s.router.Post("/tables/{name}/insert", s.handleInsertRow)
 }
 
 // Router returns the chi router for testing purposes.
