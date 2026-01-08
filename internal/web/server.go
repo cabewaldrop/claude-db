@@ -79,6 +79,9 @@ func (s *Server) routes() {
 	s.router.Get("/query", s.handleQueryPage)           // Query page form
 	s.router.Post("/query", s.handleQueryExecute)       // HTML form handler for HTMX
 
+	// Static file serving (JS, CSS)
+	s.staticRoutes()
+
 	// JSON API routes
 	s.router.Route("/api", func(r chi.Router) {
 		r.Get("/tables", s.handleAPITables)

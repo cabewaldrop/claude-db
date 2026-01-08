@@ -222,3 +222,94 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestStaticFileServing(t *testing.T) {
+	srv := NewServer(0, nil)
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+
+	// Test htmx.min.js is served
+	resp, err := http.Get(ts.URL + "/static/htmx.min.js")
+	if err != nil {
+		t.Fatalf("Failed to GET /static/htmx.min.js: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200 for htmx.min.js, got %d", resp.StatusCode)
+	}
+
+	// Verify content type is JavaScript
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "text/javascript; charset=utf-8" && contentType != "application/javascript" {
+		t.Errorf("Expected JavaScript content type, got %q", contentType)
+	}
+
+	// Verify body is not empty
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+	if len(body) < 1000 {
+		t.Errorf("Expected substantial htmx.min.js content, got %d bytes", len(body))
+	}
+}
+
+func TestStaticStyleCSS(t *testing.T) {
+	srv := NewServer(0, nil)
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/static/style.css")
+	if err != nil {
+		t.Fatalf("Failed to GET /static/style.css: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200 for style.css, got %d", resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "text/css; charset=utf-8" {
+		t.Errorf("Expected CSS content type, got %q", contentType)
+	}
+}
+
+func TestStaticFileNotFound(t *testing.T) {
+	srv := NewServer(0, nil)
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/static/nonexistent.js")
+	if err != nil {
+		t.Fatalf("Failed to GET /static/nonexistent.js: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status 404 for nonexistent file, got %d", resp.StatusCode)
+	}
+}
+
+func TestPathTraversalBlocked(t *testing.T) {
+	srv := NewServer(0, nil)
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+
+	// Attempt path traversal - should be blocked by http.FileServer
+	resp, err := http.Get(ts.URL + "/static/../../../etc/passwd")
+	if err != nil {
+		t.Fatalf("Failed to GET path traversal attempt: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Path traversal should result in 404 (file not found in embedded FS)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status 404 for path traversal attempt, got %d", resp.StatusCode)
+	}
+}
