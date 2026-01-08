@@ -158,7 +158,7 @@ func TestQueryExecuteTooLong(t *testing.T) {
 	}
 }
 
-func TestQueryExecuteMethodNotAllowed(t *testing.T) {
+func TestQueryGETReturnsPage(t *testing.T) {
 	exec, cleanup := setupTestExecutorForHandler(t)
 	defer cleanup()
 
@@ -166,15 +166,15 @@ func TestQueryExecuteMethodNotAllowed(t *testing.T) {
 	ts := httptest.NewServer(srv.Router())
 	defer ts.Close()
 
-	// GET is not allowed
+	// GET /query returns the query page form
 	resp, err := http.Get(ts.URL + "/query")
 	if err != nil {
 		t.Fatalf("Failed to GET /query: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status 405, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 }
 

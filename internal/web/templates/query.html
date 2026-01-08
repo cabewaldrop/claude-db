@@ -1,0 +1,62 @@
+{{/* templates/query.html - SQL query input page */}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Query - claudedb</title>
+    <script src="/static/htmx.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="brand">claudedb</a>
+        <ul>
+            <li><a href="/query">Query</a></li>
+            <li><a href="/tables">Tables</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        <div class="query-page">
+            <h1>SQL Query</h1>
+
+            <form hx-post="/query"
+                  hx-target="#results"
+                  hx-swap="innerHTML"
+                  hx-indicator="#loading">
+
+                <div class="form-group">
+                    <label for="sql">SQL Statement:</label>
+                    <textarea
+                        id="sql"
+                        name="sql"
+                        rows="6"
+                        placeholder="SELECT * FROM users;"
+                        required
+                    >{{.Query}}</textarea>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Execute</button>
+                    <label>
+                        <input type="checkbox" name="explain" value="1">
+                        Show Query Plan
+                    </label>
+                </div>
+            </form>
+
+            <div id="loading" class="htmx-indicator">
+                Executing query...
+            </div>
+
+            <div id="results">
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>claudedb web interface</p>
+    </footer>
+</body>
+</html>
