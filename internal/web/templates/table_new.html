@@ -1,0 +1,81 @@
+{{/* templates/table_new.html - Create new table form */}}
+{{define "title"}}Create Table - claudedb{{end}}
+
+{{define "content"}}
+<div class="create-table-page">
+    <nav class="breadcrumb">
+        <a href="/tables">Tables</a> / <span>Create</span>
+    </nav>
+
+    <h1>Create Table</h1>
+
+    <form hx-post="/tables" hx-target="#result" id="create-table-form">
+        <div class="form-group">
+            <label for="table-name">Table Name:</label>
+            <input type="text" id="table-name" name="table_name"
+                   pattern="[a-zA-Z_][a-zA-Z0-9_]*"
+                   required
+                   placeholder="my_table">
+            <small>Letters, numbers, underscores. Must start with letter or underscore.</small>
+        </div>
+
+        <div class="columns-section">
+            <h2>Columns</h2>
+            <div id="columns-container">
+                <!-- Column rows added dynamically -->
+            </div>
+            <button type="button" onclick="addColumn()" class="btn-secondary">
+                + Add Column
+            </button>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn-primary">Create Table</button>
+            <a href="/tables" class="btn">Cancel</a>
+        </div>
+    </form>
+
+    <div id="result"></div>
+</div>
+
+<template id="column-template">
+    <div class="column-row">
+        <input type="text" name="col_name[]" placeholder="column_name" required>
+        <select name="col_type[]" required>
+            <option value="INTEGER">INTEGER</option>
+            <option value="TEXT">TEXT</option>
+            <option value="REAL">REAL</option>
+            <option value="BLOB">BLOB</option>
+        </select>
+        <label><input type="checkbox" name="col_pk[]"> PK</label>
+        <label><input type="checkbox" name="col_notnull[]"> NOT NULL</label>
+        <button type="button" onclick="removeColumn(this)" class="btn-small">Remove</button>
+    </div>
+</template>
+
+<script>
+let columnIndex = 0;
+
+function addColumn() {
+    const template = document.getElementById("column-template");
+    const container = document.getElementById("columns-container");
+    const clone = template.content.cloneNode(true);
+
+    // Add index to checkbox values for identification
+    const pkCheckbox = clone.querySelector('input[name="col_pk[]"]');
+    const notNullCheckbox = clone.querySelector('input[name="col_notnull[]"]');
+    pkCheckbox.value = columnIndex;
+    notNullCheckbox.value = columnIndex;
+    columnIndex++;
+
+    container.appendChild(clone);
+}
+
+function removeColumn(btn) {
+    btn.closest(".column-row").remove();
+}
+
+// Add first column by default
+document.addEventListener("DOMContentLoaded", addColumn);
+</script>
+{{end}}

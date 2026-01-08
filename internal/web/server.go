@@ -75,6 +75,11 @@ func (s *Server) routes() {
 
 	s.router.Get("/", s.handleIndex)
 	s.router.Get("/health", s.handleHealth)
+
+	// Table management routes
+	s.router.Get("/tables/new", s.handleCreateTableForm)
+	s.router.Post("/tables", s.handleCreateTable)
+
 	// Additional routes will be added by other tasks:
 	// - Static file serving
 	// - Query execution endpoints
