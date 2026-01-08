@@ -76,6 +76,7 @@ func (s *Server) routes() {
 	// Web UI routes
 	s.router.Get("/", s.handleIndex)
 	s.router.Get("/health", s.handleHealth)
+	s.router.Post("/query", s.handleQueryExecute) // HTML form handler for HTMX
 
 	// JSON API routes
 	s.router.Route("/api", func(r chi.Router) {
