@@ -70,6 +70,7 @@ func NewServer(port int, exec *executor.Executor) *Server {
 func (s *Server) routes() {
 	s.router.Get("/", s.handleIndex)
 	s.router.Get("/health", s.handleHealth)
+	s.router.Get("/tables/{name}/data", s.handleTableData)
 	// Additional routes will be added by other tasks:
 	// - Static file serving
 	// - Query execution endpoints
