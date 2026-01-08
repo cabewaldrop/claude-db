@@ -8,14 +8,14 @@ import (
 	"io"
 )
 
-//go:embed templates/*
+//go:embed templates/*.html templates/partials/*.html
 var templateFS embed.FS
 
 var templates *template.Template
 
 func init() {
 	var err error
-	templates, err = template.ParseFS(templateFS, "templates/*.html")
+	templates, err = template.ParseFS(templateFS, "templates/*.html", "templates/partials/*.html")
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse templates: %v", err))
 	}

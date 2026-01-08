@@ -1,0 +1,16 @@
+{{/* templates/partials/error.html - Error display partial */}}
+<div class="query-error" role="alert">
+    <h3>Error</h3>
+    <p class="error-message">{{if .Error}}{{.Error}}{{else}}An error occurred{{end}}</p>
+
+    {{if .Query}}
+    <details>
+        <summary>Query</summary>
+        <pre class="error-query">{{.Query}}</pre>
+    </details>
+    {{end}}
+
+    {{if .Hint}}
+    <p class="error-hint">Hint: {{.Hint}}</p>
+    {{end}}
+</div>
