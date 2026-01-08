@@ -1,0 +1,51 @@
+{{/* templates/partials/plan.html - Query plan display template */}}
+<div class="query-plan">
+    <h3>Query Plan</h3>
+
+    {{if .Plan}}
+    <div class="plan-summary">
+        <div class="plan-type {{.Plan.Type | lower}}">
+            {{.Plan.Type}}
+        </div>
+
+        {{if .Plan.Table}}
+        <div class="plan-detail">
+            <span class="label">Table:</span>
+            <span class="value">{{.Plan.Table}}</span>
+        </div>
+        {{end}}
+
+        {{if .Plan.Index}}
+        <div class="plan-detail">
+            <span class="label">Index:</span>
+            <span class="value">{{.Plan.Index}}</span>
+        </div>
+        {{end}}
+
+        {{if .Plan.EstimatedRows}}
+        <div class="plan-detail">
+            <span class="label">Est. Rows:</span>
+            <span class="value">{{.Plan.EstimatedRows}}</span>
+        </div>
+        {{end}}
+    </div>
+
+    {{if .Plan.Predicates}}
+    <div class="plan-predicates">
+        <h4>Predicates</h4>
+        <ul>
+            {{range .Plan.Predicates}}
+            <li>{{.}}</li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+    {{end}}
+
+    {{if .RawOutput}}
+    <details class="plan-raw">
+        <summary>Raw Output</summary>
+        <pre>{{.RawOutput}}</pre>
+    </details>
+    {{end}}
+</div>
