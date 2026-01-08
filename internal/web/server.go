@@ -89,6 +89,9 @@ func (s *Server) routes() {
 		r.Get("/tables/{name}/rows", s.handleAPITableRows)
 		r.Post("/query", s.handleAPIQuery)
 	})
+
+	// Table data manipulation endpoints
+	s.router.Delete("/tables/{name}/{pk}", s.handleDeleteRow)
 }
 
 // Router returns the chi router for testing purposes.

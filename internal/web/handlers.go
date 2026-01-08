@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/cabewaldrop/claude-db/internal/sql/executor"
 	"github.com/cabewaldrop/claude-db/internal/sql/lexer"
 	"github.com/cabewaldrop/claude-db/internal/sql/parser"
@@ -189,4 +191,77 @@ func (s *Server) handleQueryPage(w http.ResponseWriter, r *http.Request) {
 	if err := RenderTemplate(w, "query.html", data); err != nil {
 		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// handleDeleteRow handles DELETE /tables/{name}/{pk} requests.
+// It deletes a row from the specified table by primary key value.
+// Used by HTMX with hx-delete and hx-confirm for user confirmation.
+func (s *Server) handleDeleteRow(w http.ResponseWriter, r *http.Request) {
+	tableName := chi.URLParam(r, "name")
+	pkValue := chi.URLParam(r, "pk")
+
+	// Check if executor is available
+	if s.executor == nil {
+		http.Error(w, "Database not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get the table to check for primary key
+	tbl, ok := s.executor.GetTable(tableName)
+	if !ok {
+		http.Error(w, "Table not found", http.StatusNotFound)
+		return
+	}
+
+	// Check if table has a primary key
+	if tbl.Schema.PrimaryKey < 0 {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`<div class="error">Table has no primary key - cannot delete specific rows</div>`))
+		return
+	}
+
+	// Get the primary key column name
+	pkCol := tbl.Schema.Columns[tbl.Schema.PrimaryKey].Name
+
+	// Build DELETE SQL statement
+	// Quote string values, leave numeric values unquoted
+	var sql string
+	if tbl.Schema.Columns[tbl.Schema.PrimaryKey].Type == parser.TypeText {
+		sql = fmt.Sprintf("DELETE FROM %s WHERE %s = '%s'", tableName, pkCol, pkValue)
+	} else {
+		sql = fmt.Sprintf("DELETE FROM %s WHERE %s = %s", tableName, pkCol, pkValue)
+	}
+
+	// Parse and execute the SQL
+	lex := lexer.New(sql)
+	p := parser.New(lex)
+	stmt, err := p.Parse()
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(fmt.Sprintf(`<div class="error">Parse error: %s</div>`, err.Error())))
+		return
+	}
+
+	result, err := s.executor.Execute(stmt)
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf(`<div class="error">%s</div>`, err.Error())))
+		return
+	}
+
+	// Check if any rows were affected
+	if result.RowCount == 0 {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`<div class="error">Row not found - may have already been deleted</div>`))
+		return
+	}
+
+	// Success - return empty response to remove row from DOM
+	// HTMX will use hx-swap="outerHTML" to replace the row with this empty content
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("<!-- Row deleted -->"))
 }
