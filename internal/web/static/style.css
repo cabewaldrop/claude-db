@@ -85,6 +85,109 @@ pre {
   overflow-x: auto;
 }
 
+/* Navigation */
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background-color: var(--primary-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.nav-brand {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--text-color);
+  text-decoration: none;
+}
+
+.nav-links a {
+  color: var(--text-color);
+  text-decoration: none;
+  margin-left: 1.5rem;
+}
+
+.nav-links a:hover {
+  color: var(--accent-color);
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 2rem;
+  color: #888;
+  border-top: 1px solid var(--border-color);
+  margin-top: 2rem;
+}
+
+/* Buttons */
+.btn {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background-color: var(--accent-color);
+  color: white;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+/* Table List Page */
+.tables-page h1 {
+  margin-bottom: 1.5rem;
+}
+
+.actions {
+  margin-bottom: 1.5rem;
+}
+
+.table-list {
+  list-style: none;
+}
+
+.table-item {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.table-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  color: var(--text-color);
+  text-decoration: none;
+}
+
+.table-link:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.table-name {
+  font-weight: 500;
+}
+
+.table-meta {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.no-tables {
+  color: #888;
+  padding: 2rem;
+  text-align: center;
+}
+
+.no-tables a {
+  color: var(--accent-color);
+}
+
 /* HTMX loading indicator */
 .htmx-indicator {
   opacity: 0;

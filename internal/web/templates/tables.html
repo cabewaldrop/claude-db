@@ -1,0 +1,26 @@
+{{define "title"}}Tables - ClaudeDB{{end}}
+
+{{define "content"}}
+<div class="tables-page">
+    <h1>Tables</h1>
+
+    <div class="actions">
+        <a href="/tables/new" class="btn btn-primary">Create Table</a>
+    </div>
+
+    {{if .Tables}}
+    <ul class="table-list">
+        {{range .Tables}}
+        <li class="table-item">
+            <a href="/tables/{{.Name}}" class="table-link">
+                <span class="table-name">{{.Name}}</span>
+                <span class="table-meta">{{.RowCount}} rows</span>
+            </a>
+        </li>
+        {{end}}
+    </ul>
+    {{else}}
+    <p class="no-tables">No tables found. <a href="/tables/new">Create one?</a></p>
+    {{end}}
+</div>
+{{end}}

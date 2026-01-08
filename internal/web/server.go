@@ -74,9 +74,12 @@ func (s *Server) routes() {
 	// Static file serving (JS, CSS)
 	s.staticRoutes()
 
+	// Table browsing endpoints
+	s.router.Get("/tables", s.handleTableList)
+
 	// Additional routes will be added by other tasks:
 	// - Query execution endpoints
-	// - Table browsing endpoints
+	// - Individual table detail endpoints
 }
 
 // Router returns the chi router for testing purposes.
