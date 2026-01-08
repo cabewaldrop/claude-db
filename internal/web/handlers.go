@@ -29,3 +29,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
+
+// handleQueryPage serves the SQL query input form.
+// Supports pre-populating the query via ?q= query parameter for bookmarking.
+func (s *Server) handleQueryPage(w http.ResponseWriter, r *http.Request) {
+	data := map[string]interface{}{
+		"Query": "", // Empty initially
+	}
+
+	// Pre-populate from query param if provided
+	if q := r.URL.Query().Get("q"); q != "" {
+		data["Query"] = q
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := RenderTemplate(w, "query.html", data); err != nil {
+		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
+	}
+}
